@@ -1,0 +1,20 @@
+# ---- 被试数据：绝不入库（含个人信息、且每次运行都会新增） ----
+data/
+
+# ---- Python 运行产物 ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# ---- PsychoPy 生成物 ----
+# .psyrun 记录的是本机路径，换台电脑就失效，属于机器本地配置
+*.psyrun
+*.log
+error.log
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
