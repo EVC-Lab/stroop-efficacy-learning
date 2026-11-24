@@ -266,3 +266,44 @@ PsychoPy 的 `color` 默认色彩空间是 **rgb，范围 −1…1**，不是 0�
 - 若计时报警（frame dropped），把显示器刷新率调到 60Hz、关掉后台软件，
   并把 `Window(..., checkTiming=False)` 保持默认设置。
 - 数据列名用中文是为了方便在 Excel 里核对；下游 R/Python 分析可直接按列名取。
+
+---
+
+## 11. 用 git 做版本管理
+
+本目录已是一个 git 仓库（分支 `main`），当前提交打了标签 `v1.2`。
+
+**每次正式采集前先提交并打标签**，这样每份数据都能追溯到确切的代码版本：
+
+```bash
+cd stroop_efficacy_exp1
+git status                 # 确认只有 .py / README / CHANGELOG 有改动
+git add -A
+git commit -m "说明这次改了什么"
+git tag -a v1.3 -m "一句话说明"
+```
+
+**为什么值得这么做**：`meta.json` 里有 `代码版本` 字段（如 `v1.2+c0c5669`），
+数据跑完就能反查到当时的提交。改过参数却忘了记、两组被试其实用了不同阈值——
+这类问题靠这个字段能立刻排除。工作区有未提交改动时，该字段会自动带上 `-dirty` 后缀，
+等于提醒你“数据对应的代码不是干净的提交”。
+
+**不要提交的东西**（`.gitignore` 已配置）：
+
+| 路径 | 原因 |
+|---|---|
+| `data/` | 被试数据，含姓名等个人信息，且每次运行都会新增 |
+| `*.psyrun` | PsychoPy 记录的本机路径，换台电脑就失效 |
+| `__pycache__/` | Python 字节码缓存 |
+
+**回退到某个版本**：
+
+```bash
+git log --oneline            # 找提交号
+git diff v1.2 -- exp1_stroop_efficacy.py   # 看两版差异
+git checkout v1.2 -- exp1_stroop_efficacy.py   # 只还原脚本，不动其他文件
+```
+
+**注意**：换行符已把 `core.autocrlf` 设为 `false`（按磁盘字节原样存储），
+避免 Windows 上每次提交都出现整篇“改动”的假差异。
+
