@@ -70,27 +70,22 @@ _CODE_VERSION = None
 
 
 def code_version():
-    """返回形如 'v1.2+3a7f1c9' 的版本标记；工作区有未提交改动时追加 '-dirty'。"""
+    """返回形如 'v1.2' / 'v1.2-3-g3a7f1c9' / 'v1.2-3-g3a7f1c9-dirty' 的版本标记。
+
+    用 `git describe --tags --always --dirty`：有标签时给出“最近标签 + 领先几个提交 + 提交号”，
+    没有标签时退化为提交号；工作区有未提交改动会自动带 `-dirty`。
+    """
     global _CODE_VERSION
     if _CODE_VERSION is not None:
         return _CODE_VERSION
     base = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd()
     try:
         import subprocess
-
-        def run(*args):
-            p = subprocess.run(["git"] + list(args), cwd=base,
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
-            return p.stdout.decode("utf-8", "replace").strip()
-
-        sha = run("rev-parse", "--short", "HEAD")
-        if not sha:
-            _CODE_VERSION = "unknown"
-            return _CODE_VERSION
-        tag = run("describe", "--tags", "--abbrev=0")
-        dirt = run("status", "--porcelain")
-        out = ("%s+%s" % (tag, sha)) if tag else sha
-        _CODE_VERSION = out + ("-dirty" if dirt else "")
+        p = subprocess.run(
+            ["git", "describe", "--tags", "--always", "--dirty"],
+            cwd=base, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+        out = p.stdout.decode("utf-8", "replace").strip()
+        _CODE_VERSION = out if out else "unknown"
     except Exception:
         _CODE_VERSION = "unknown"
     return _CODE_VERSION
