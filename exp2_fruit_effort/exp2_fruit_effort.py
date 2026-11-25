@@ -1,0 +1,1003 @@
+# -*- coding: utf-8 -*-
+"""
+实验2复现：图片—词干扰 + 自由反应区间 + 随时间漂移的“效能”
+================================================================================
+对应《实验内容》2.1–2.3：
+
+    288 个区段（interval）。每个区段给一个固定作答窗口（随机 2000 / 3000 / 4000 ms），
+    被试在窗口内**自主决定做多少个试次**（自由反应，没有单试次时限）——这是实验2
+    相对实验1的核心改动，目的是让 DDM 能同时估计漂移率与阈限。
+
+    单区段流程（2.2）：
+        注视点 1000 / 1500 / 2000 ms
+            → 自由作答窗口（窗口内可连续做任意多个试次）
+            → 反馈 1500 ms：本次得多少分 + 分数是否取决于表现
+
+    任务：4 张灰度水果图（苹果 / 梨 / 柠檬 / 桃）上叠加水果词，
+          判断**图片是什么水果**、忽略文字；D F J K 对应四种水果。
+          一致 = 词与图相同；不一致 = 词是另一种水果。
+
+    计分：每答对一次 +10 分（连续计分，不是实验1的二元 $0.50 / $0.00）。
+          随机区段的分数从“过去 10 个看表现区段的得分窗口”里抽一条（yoking），
+          使两类区段的得分分布匹配。
+
+运行方式（重要）：必须用 **PsychoPy 自带的 Python**，不要用系统 python。
+    方式A：PsychoPy → Coder 视图 → File/Open 本文件 → 点绿色 Run 三角
+    方式B："C:\\Program Files\\PsychoPy\\python.exe" exp2_fruit_effort.py
+
+    想快速试跑：把下面 DEBUG_FAST 改成 True（12 个区段、窗口 1s、不全屏）。
+
+数据输出：
+    ./data/<编号>_<姓名>_<时间>/trials.csv     每个试次一行（含区段号）
+    ./data/<编号>_<姓名>_<时间>/intervals.csv  每个区段一行（效能概率/类型/窗口/得分）
+    ./data/<编号>_<姓名>_<时间>/probes.csv     每次主观探针一行
+    ./data/<编号>_<姓名>_<时间>/meta.json      组别、总分、种子等
+    ./stimuli/fruit_*.png                      水果刺激图，首次运行自动生成
+================================================================================
+"""
+
+import os
+import csv
+import json
+import math
+import random
+import re
+import statistics
+from collections import deque
+from datetime import datetime
+
+from psychopy import visual, core, event, gui
+
+try:  # 老接口优先：event.Mouse 方法齐全（getPressed / getPos），新版 PsychoPy 仍提供
+    MouseClass = event.Mouse
+except AttributeError:  # 极新版本若移除，再退回 hardware.mouse
+    from psychopy.hardware import mouse as mouse_mod
+    MouseClass = mouse_mod.Mouse
+
+try:  # 水果刺激图用 Pillow 现场绘制（PsychoPy 自带）
+    from PIL import Image, ImageDraw, ImageFilter, ImageChops
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
+
+
+def mouse_left_pressed(mouse):
+    """跨版本判断鼠标左键是否按下。
+
+    PsychoPy 2024.x 的 psychopy.hardware.mouse.Mouse 已经删掉了 getPressed()，
+    只剩 getLeftButtonPressed()；老版本则只有 getPressed()。直接写 getPressed()
+    会在新版本上抛 AttributeError，把整个实验打断。
+    """
+    if hasattr(mouse, "getPressed"):
+        try:
+            return bool(mouse.getPressed()[0])
+        except Exception:
+            pass
+    if hasattr(mouse, "getLeftButtonPressed"):
+        return bool(mouse.getLeftButtonPressed())
+    return False
+
+
+# ==============================================================================
+#  颜色小工具
+#  PsychoPy 默认色彩空间是 rgb，范围 -1…1，不是 0…255！
+#  (0,0,0)→(-1,-1,-1) 纯黑    (128,128,128)→(0,0,0) 中灰    (255,255,255)→(1,1,1) 纯白
+#  直接把 128 之类 0–255 的值填进去会被截断成 1.0，画出来是“纯白”。
+# ==============================================================================
+def rgb255(r, g, b, alpha=None):
+    """按 0–255 的直觉填色，内部换算成 PsychoPy 的 rgb（-1…1）。"""
+    def conv(v):
+        return max(-1.0, min(1.0, v / 127.5 - 1.0))
+    out = (conv(r), conv(g), conv(b))
+    return out if alpha is None else out + (alpha,)
+
+
+# ==============================================================================
+#  一、参数区
+# ==============================================================================
+CFG = {
+    # ---------- 屏幕与文字 ----------
+    "FULLSCR": True,                 # 正式实验全屏；调试可改 False
+    "BG_COLOR": rgb255(0, 0, 0),     # 纯黑背景
+    "FONT": "Microsoft YaHei",       # 中文必须用中文字体（macOS 改 'PingFang SC'）
+    "DEBUG_FAST": False,             # True = 缩短时长/区段数，仅用于跑通流程
+    "SKIP_PRACTICE": False,          # True = 跳过练习，直接跑 288 区段（演示/补数据用）
+
+    # ---------- 刺激材料与按键（2.2）----------
+    # 四键从左到右：D 苹果 / F 梨 / J 柠檬 / K 桃
+    "FRUITS": ["apple", "pear", "lemon", "peach"],
+    "FRUIT_CN": {"apple": "苹果", "pear": "梨", "lemon": "柠檬", "peach": "桃"},
+    "KEYS": {"apple": "d", "pear": "f", "lemon": "j", "peach": "k"},
+    "PIC_SIZE": 0.50,            # 图片边长 = 屏高的 50%
+    "WORD_HEIGHT": 0.080,        # 叠加的水果词字号
+    "WORD_COLOR": (1, 1, 1),
+    # 水果图配色（0–255）：深灰实心 + 浅灰描边，纯黑底上清楚，白字压在上面也够对比
+    "FRUIT_FILL_GRAY": 78,
+    "FRUIT_LINE_GRAY": 158,
+    "FRUIT_LINE_W": 0.010,       # 描边宽度（占画布边长比例）
+    "COND_RATIO": 0.50,          # 一致试次比例，其余为不一致
+
+    # ---------- 时间参数（秒，2.2）----------
+    "FIX_CHOICES": (1.0, 1.5, 2.0),        # 注视点随机 1000/1500/2000ms
+    "WINDOW_CHOICES": (2.0, 3.0, 4.0),     # 作答窗口随机 2000/3000/4000ms
+    "FB_DUR": 1.5,                         # 区段反馈 1500ms
+    "ISI_BETWEEN": 0.15,                   # 区段内两个试次之间的空屏（防连击误触）
+    "MIN_TRIAL_TIME": 0.35,                # 窗口剩余不足这么久就不开新试次
+
+    # ---------- 区段构成（2.2）----------
+    "N_INTERVALS": 288,
+    "BREAK_EVERY": 48,           # 每 48 区段休息一次（原文未写，可改；0=不休息）
+
+    # ---------- 效能漂移（2.2）----------
+    "P_MIN": 0.10,
+    "P_MAX": 0.90,
+    "TRAJ_SEED": 20260202,       # 按 288 区段重新生成，与实验1不同但可比
+    "TRAJ_SMOOTH": 0.05,
+
+    # ---------- 连续计分与 yoking（2.2）----------
+    "POINT_PER_CORRECT": 10,     # 每答对一次 +10 分
+    "YOKE_WINDOW": 10,           # 存最近 10 个“看表现”区段的得分
+    # 初始窗口：8 个常规分 + 2 个低分，均值与预试的典型区段得分接近
+    "YOKE_INIT_SCORES": [30.0] * 8 + [10.0] * 2,
+    "SHOW_TOTAL_SCORE": True,    # 反馈里是否显示“累计 xxx 分”
+    "SHOW_EFF_LABEL": True,      # 反馈图标下是否加一行文字说明（关掉就只靠图标）
+    # 效能反馈的“按键图标”：留空用矢量键帽；填透明底 PNG 路径则直接显示图片
+    "BTN_ICON_IMG": "",
+    "BTN_LABEL": "按 键",        # 键帽上的字，改成 "" 就是一块空白键帽
+
+    # ---------- 主观探针（2.2）----------
+    "PROBE_EVERY": (2, 4),       # 每 2–4 个区段插一次
+    "SHOW_VAS_NUMBER": False,    # 量表上是否显示 0–100 数字（原文不显示）
+
+    # ---------- 练习（原文未细写，按实验1的结构压缩）----------
+    "N_PRAC1": 8,                # 水果—按键映射
+    "N_PRAC2": 12,               # 图片—词干扰
+    "N_PRAC3": 4,                # 自由作答窗口（体验“窗口结束才结算”）
+    "PRAC_TIMEOUT": 2.0,         # 练习单试次的作答上限
+    "PRAC_WINDOW": 2.0,          # 练习区段的窗口长度
+}
+
+if CFG["DEBUG_FAST"]:  # 一键快跑，只为检查流程
+    CFG.update(
+        N_INTERVALS=12, FULLSCR=False, BREAK_EVERY=0,
+        FIX_CHOICES=(0.3,), WINDOW_CHOICES=(1.0,), FB_DUR=0.5,
+        PRAC_WINDOW=1.0, PRAC_TIMEOUT=1.2, PROBE_EVERY=(2, 3),
+    )
+
+
+# ==============================================================================
+#  二、纯逻辑函数（与界面无关，方便校验）
+# ==============================================================================
+def make_trajectory(n, p_min, p_max, seed, reverse=False, smooth_frac=0.05):
+    """生成一条事先固定的效能漂移轨迹（2.2）。
+
+    高斯白噪声 → 环形高斯核平滑（缓慢漂移）→ 线性映射到 [p_min, p_max]。
+    reverse=True 输出镜像序列，用于“一半被试正向、一半反向”平衡时间顺序效应。
+    """
+    rng = random.Random(seed)
+    noise = [rng.gauss(0.0, 1.0) for _ in range(n)]
+
+    sigma = max(1.0, n * smooth_frac)
+    half = int(3 * sigma)
+    kernel = [math.exp(-0.5 * ((i / sigma) ** 2)) for i in range(-half, half + 1)]
+    ksum = sum(kernel)
+    kernel = [k / ksum for k in kernel]
+
+    padded = noise[-half:] + noise + noise[:half]
+    smooth = []
+    for i in range(half, half + n):
+        acc = 0.0
+        for j, k in enumerate(kernel):
+            acc += padded[i - half + j] * k
+        smooth.append(acc)
+
+    lo, hi = min(smooth), max(smooth)
+    unit = [(v - lo) / (hi - lo + 1e-12) for v in smooth]
+    p = [p_min + u * (p_max - p_min) for u in unit]
+    if reverse:
+        p = p[::-1]
+    return p
+
+
+def make_probe_schedule(n_intervals, every, rng):
+    """安排主观探针位置（2.2）：每 2–4 个区段插一次，两类探针交替。
+
+    返回 {区段下标: 'efficacy' / 'reward'}，表示“在第 i 个区段之后插入”。
+    """
+    sched = {}
+    i = -1
+    kind = "efficacy" if rng.random() < 0.5 else "reward"
+    while True:
+        i += rng.randint(*every)
+        if i > n_intervals - 1:
+            break
+        sched[i] = kind
+        kind = "reward" if kind == "efficacy" else "efficacy"
+    return sched
+
+
+class YokeWindow(object):
+    """连续分数的 yoking 窗口（2.2）。
+
+    窗口里存最近 10 个“看表现”区段的**得分**（不再是 0/1 的奖赏有无）。
+    随机区段的分数直接从这个窗口里抽一条，于是两类区段的得分分布被强制匹配。
+    每来一个“看表现”区段，它的得分入窗、最旧的一条出窗。
+    """
+
+    def __init__(self, n=None, init=None):
+        n = CFG["YOKE_WINDOW"] if n is None else n
+        init = CFG["YOKE_INIT_SCORES"] if init is None else init
+        self.buf = deque([float(v) for v in init][-n:], maxlen=n)
+
+    def sample(self, rng):
+        return float(rng.choice(list(self.buf)))
+
+    def add(self, score):
+        self.buf.append(float(score))
+
+    def mean(self):
+        return sum(self.buf) / float(len(self.buf))
+
+
+def make_score_schedule(n_intervals, rng):
+    """预先平衡区段窗口长度：三个长度各占 1/3，再整体打乱。
+
+    原文只说“随机取 2000/3000/4000ms”。纯随机会出现某长度偏多（尤其样本小时），
+    进而让“区段平均试次数”抖动；这里改成等量分配 + 打乱，统计上更干净，
+    分析时仍把区段长度作为协变量（2.3）。
+    """
+    lens = list(CFG["WINDOW_CHOICES"])
+    n_each = n_intervals // len(lens)
+    seq = []
+    for L in lens:
+        seq += [L] * n_each
+    while len(seq) < n_intervals:
+        seq.append(rng.choice(lens))
+    rng.shuffle(seq)
+    return seq
+
+
+# ==============================================================================
+#  三、水果刺激图（用 Pillow 现场绘制，无需外部素材）
+# ==============================================================================
+# 每个水果都用若干“同色填充”的椭圆/线段叠成。叠出来的蒙版是二值的，内部边界
+# 不会留下任何线，所以剪影是平滑的；形状差异靠圆/椭圆的比例和位置来区分。
+_FRUIT_SHAPES = {
+    # 苹果：一个大椭圆做身体，上面压两个圆形肩膀 → 顶部自然形成一个凹口（果蒂窝）
+    "apple": dict(
+        body=[(0.175, 0.300, 0.825, 0.880)],
+        extra=[],
+        erase=[(0.430, 0.252, 0.570, 0.338)],
+        stem=((0.500, 0.300), (0.516, 0.200)),
+        leaf=(0.518, 0.198, 0.668, 0.262),
+    ),
+    # 梨：下大椭圆 + 上部细颈椭圆 + 中间过渡椭圆，合成上窄下宽的梨形
+    "pear": dict(
+        body=[(0.255, 0.500, 0.745, 0.885), (0.335, 0.400, 0.665, 0.720),
+              (0.405, 0.265, 0.595, 0.630)],
+        extra=[],
+        stem=((0.500, 0.290), (0.500, 0.190)),
+        leaf=None,
+    ),
+    # 柠檬：扁椭圆 + 左右两个小鼓包，形成两端凸起的柠檬轮廓
+    "lemon": dict(
+        body=[(0.190, 0.375, 0.810, 0.665)],
+        extra=[(0.150, 0.498, 0.225, 0.545), (0.775, 0.498, 0.850, 0.545)],
+        stem=None,
+        leaf=None,
+    ),
+    # 桃：近圆的椭圆 + 顶部小鼓包 + 叶子，中缝在成品图上另画
+    "peach": dict(
+        body=[(0.225, 0.330, 0.775, 0.875)],
+        extra=[(0.455, 0.295, 0.545, 0.405)],
+        stem=None,
+        leaf=(0.545, 0.345, 0.720, 0.415),
+    ),
+}
+
+
+def _fruit_mask(name, S):
+    """在 S×S 灰度蒙版上画出水果剪影（255 = 实体，0 = 透明）。"""
+    m = Image.new("L", (S, S), 0)
+    d = ImageDraw.Draw(m)
+    shp = _FRUIT_SHAPES[name]
+
+    for box in shp["body"] + shp["extra"]:
+        d.ellipse([x * S for x in box], fill=255)
+    for box in shp.get("erase", []):      # 从顶部切一个浅弧口当果蒂窝（不封闭成洞）
+        d.ellipse([x * S for x in box], fill=0)
+    if shp["stem"]:
+        (x0, y0), (x1, y1) = shp["stem"]
+        d.line([(x0 * S, y0 * S), (x1 * S, y1 * S)], fill=255, width=max(2, int(0.022 * S)))
+    if shp["leaf"]:
+        d.ellipse([x * S for x in shp["leaf"]], fill=255)
+    return m
+
+
+def _peach_cleft(draw, S):
+    """桃子的中缝：一条略弯的竖线，画在成品图上（不属于剪影）。"""
+    color = (CFG["FRUIT_LINE_GRAY"],) * 3 + (255,)
+    pts = []
+    for k in range(21):
+        t = k / 20.0
+        y = 0.395 + t * 0.415
+        x = 0.500 + 0.018 * math.sin(math.pi * t)
+        pts.append((x * S, y * S))
+    draw.line(pts, fill=color, width=max(2, int(S * 0.008)), joint="curve")
+
+
+def make_fruit_image(name, size=512, supersample=2):
+    """生成一张透明底灰度水果 PNG（RGBA）。"""
+    S = size * supersample
+    mask = _fruit_mask(name, S).resize((size, size), Image.LANCZOS)
+
+    lw = max(3, int(size * CFG["FRUIT_LINE_W"]))
+    inner = mask.filter(ImageFilter.MinFilter(lw * 2 + 1))      # 腐蚀
+    ring = ImageChops.subtract(mask, inner)                     # 剩下的一圈 = 描边
+
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    fill_layer = Image.new("RGBA", (size, size),
+                           (CFG["FRUIT_FILL_GRAY"],) * 3 + (255,))
+    line_layer = Image.new("RGBA", (size, size),
+                           (CFG["FRUIT_LINE_GRAY"],) * 3 + (255,))
+    img.paste(fill_layer, (0, 0), mask)
+    img.paste(line_layer, (0, 0), ring)
+    if name == "peach":
+        _peach_cleft(ImageDraw.Draw(img), size)
+    return img
+
+
+def ensure_fruit_images(folder):
+    """确保 stimuli/ 下有 4 张水果图，返回 {水果: 路径}。已存在则直接复用。"""
+    os.makedirs(folder, exist_ok=True)
+    paths = {}
+    for name in CFG["FRUITS"]:
+        path = os.path.join(folder, "fruit_%s.png" % name)
+        if not (os.path.isfile(path) and os.path.getsize(path) > 0):
+            if not HAS_PIL:
+                raise RuntimeError(
+                    "缺少水果刺激图，且当前环境没有 Pillow。请用 PsychoPy 自带的 python "
+                    "运行一次本脚本（会自动生成 stimuli/ 下的图片），或手动把 4 张图片"
+                    "放进 stimuli/ 并命名为 fruit_apple.png 等。")
+            make_fruit_image(name).save(path)
+        paths[name] = path
+    return paths
+
+
+# ==============================================================================
+#  四、实验主类
+# ==============================================================================
+class FruitEffortExp(object):
+    def __init__(self, info):
+        self.outdir = None
+        self.update_info(info)
+
+        self.rng = random.Random()
+        self.traj_seed = CFG["TRAJ_SEED"]
+        self.rng.seed("%s-%s" % (self.subj, self.group))   # 每个被试可复现
+
+        core.checkPygletDuringWait = False
+        self.win = visual.Window(
+            size=(1280, 800), fullscr=CFG["FULLSCR"], color=CFG["BG_COLOR"],
+            units="height", allowGUI=False, checkTiming=False,
+        )
+        self.win.setMouseVisible(False)
+
+        base = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd()
+        self.img_paths = ensure_fruit_images(os.path.join(base, "stimuli"))
+
+        f = CFG["FONT"]
+        # ---- 基础刺激 ----
+        self.fix = visual.TextStim(self.win, "+", font=f, color=(1, 1, 1), height=0.09)
+        # 4 张图各建一个 ImageStim 预先载入纹理，试次里只切换对象、不反复读盘
+        self.pic_stims = dict(
+            (n, visual.ImageStim(self.win, image=pth,
+                                 size=(CFG["PIC_SIZE"], CFG["PIC_SIZE"])))
+            for n, pth in self.img_paths.items())
+        self.pic = self.pic_stims[CFG["FRUITS"][0]]
+        self.word = visual.TextStim(self.win, "", font=f, color=CFG["WORD_COLOR"],
+                                    height=CFG["WORD_HEIGHT"], bold=True)
+
+        # ---- 区段反馈 ----
+        self.fb_score = visual.TextStim(self.win, "", font=f, color=(1, 1, 1),
+                                        height=0.095, pos=(0, 0.115))
+        self.fb_total = visual.TextStim(self.win, "", font=f, color=(0.75, 0.75, 0.75),
+                                        height=0.034, pos=(0, 0.275))
+        self.fb_icon_lab = visual.TextStim(self.win, "", font=f, color=(0.85, 0.85, 0.85),
+                                           height=0.034, pos=(0, -0.228))
+        self._build_icons()
+
+        # ---- 练习用的正误反馈 ----
+        self.fb_acc = visual.TextStim(self.win, "", font=f, color=(1, 1, 1), height=0.075)
+
+        # ---- 主观探针（0–100 VAS）----
+        self.probe_q = visual.TextStim(self.win, "", font=f, color=(1, 1, 1),
+                                       height=0.048, wrapWidth=0.95, pos=(0, 0.26))
+        self.probe_line = visual.Line(self.win, start=(-0.32, -0.04), end=(0.32, -0.04),
+                                      lineColor=(1, 1, 1), lineWidth=4)
+        self.probe_lab_l = visual.TextStim(self.win, "", font=f, color=(0.85, 0.85, 0.85),
+                                           height=0.034, pos=(-0.32, -0.14))
+        self.probe_lab_r = visual.TextStim(self.win, "", font=f, color=(0.85, 0.85, 0.85),
+                                           height=0.034, pos=(0.32, -0.14))
+        self.probe_mark = visual.Circle(self.win, radius=0.016, fillColor=(1, 1, 1),
+                                        lineColor=None, pos=(0, -0.04))
+        self.probe_hint = visual.TextStim(self.win, "拖动滑块（或按 ← → 键）到你的答案位置，然后按 空格 确认",
+                                          font=f, color=(0.8, 0.8, 0.8), height=0.032, pos=(0, -0.30))
+        self.probe_num = visual.TextStim(self.win, "", font=f, color=(1, 1, 1), height=0.04,
+                                         pos=(0, 0.10))
+
+        # ---- 运行时状态 ----
+        self.kb_clock = core.Clock()
+        self.int_clock = core.Clock()
+        self.keys = list(CFG["KEYS"].values())
+        self.yoke = YokeWindow()
+        self.total_score = 0.0
+        self.rows_trials = []
+        self.rows_intervals = []
+        self.rows_probes = []
+
+    # -------------------------------------------------------------- 被试信息
+    def update_info(self, info):
+        """登记/更新被试信息（姓名、编号、漂移方向）。"""
+        self.info = info
+        self.name = str(info.get("姓名", "")).strip() or "匿名"
+        self.subj = str(info.get("被试编号", "")).strip() or auto_subject_id()
+        direction = str(info.get("漂移方向", "正向")).strip()
+
+        if direction.startswith("自动"):
+            digits = re.findall(r"\d", self.subj)
+            self.reverse = (int(digits[-1]) % 2 == 0) if digits else False
+        else:
+            self.reverse = (direction == "反向")
+        self.group = "反向" if self.reverse else "正向"
+
+    def info_text(self):
+        return ("姓名：%s\n编号：%s\n年龄：%s    性别：%s\n漂移方向：%s"
+                % (self.name, self.subj, self.info.get("年龄", ""),
+                   self.info.get("性别", ""), self.group))
+
+    def confirm_info(self):
+        """开跑前的信息确认屏：按 R 可重新填写，按空格确认。"""
+        stim = visual.TextStim(
+            self.win,
+            "请核对被试信息\n\n" + self.info_text() +
+            "\n\n信息有误：按 R 重新填写        确认无误：按 空格 开始",
+            font=CFG["FONT"], color=(1, 1, 1), height=0.045, wrapWidth=1.15,
+            alignText="center")
+        stim.draw()
+        self.win.flip()
+        event.clearEvents()
+        while True:
+            keys = event.waitKeys(keyList=["space", "r", "escape"])
+            if keys and keys[0] == "escape":
+                self.win.close()
+                core.quit()
+            if keys and keys[0] == "r":
+                return False
+            if keys and keys[0] == "space":
+                return True
+
+    # ------------------------------------------------------------------ 输出
+    def _make_outdir(self):
+        base = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd()
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe = re.sub(r'[\\/:*?"<>|\s]+', "", "%s_%s" % (self.subj, self.name))
+        d = os.path.join(base, "data", "%s_%s" % (safe, stamp))
+        os.makedirs(d, exist_ok=True)
+        return d
+
+    def save(self, verbose=False):
+        if self.outdir is None:
+            self.outdir = self._make_outdir()
+        for fname, rows in (("trials.csv", self.rows_trials),
+                            ("intervals.csv", self.rows_intervals),
+                            ("probes.csv", self.rows_probes)):
+            if not rows:
+                continue
+            path = os.path.join(self.outdir, fname)
+            with open(path, "w", newline="", encoding="utf-8-sig") as fh:
+                w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
+                w.writeheader()
+                w.writerows(rows)
+
+        main_rows = [r for r in self.rows_intervals if r["阶段"] == "main"]
+        scores = [float(r["区段得分"]) for r in main_rows]
+        meta = dict(
+            姓名=self.name, 被试编号=self.subj, 年龄=self.info.get("年龄", ""),
+            性别=self.info.get("性别", ""), 漂移方向=self.group,
+            区段数=len(main_rows), 总分=round(self.total_score, 1),
+            平均每区段得分=(round(statistics.mean(scores), 2) if scores else ""),
+            平均每区段试次数=(round(statistics.mean([int(r["试次数"]) for r in main_rows]), 2)
+                              if main_rows else ""),
+            yoking窗口均值=round(self.yoke.mean(), 2),
+            轨迹种子=self.traj_seed, 效能下限=CFG["P_MIN"], 效能上限=CFG["P_MAX"],
+            每对一次得分=CFG["POINT_PER_CORRECT"], 窗口长度选项=list(CFG["WINDOW_CHOICES"]),
+            版本="exp2_v1.0",
+        )
+        with open(os.path.join(self.outdir, "meta.json"), "w", encoding="utf-8") as fh:
+            json.dump(meta, fh, ensure_ascii=False, indent=2)
+        if verbose:
+            print("\n数据已保存到：", self.outdir)
+
+    # ------------------------------------------------------------------ 通用界面
+    def wait_space(self, text, height=0.042, color=(1, 1, 1)):
+        stim = visual.TextStim(self.win, text, font=CFG["FONT"], color=color,
+                               height=height, wrapWidth=1.1, alignText="center")
+        stim.draw()
+        self.win.flip()
+        event.clearEvents()
+        while True:
+            k = event.waitKeys(keyList=["space", "escape"])
+            if k and k[0] == "escape":
+                self.abort()
+            if k and k[0] == "space":
+                return
+
+    def abort(self):
+        self.save(verbose=True)
+        self.win.close()
+        core.quit()
+
+    def check_escape(self):
+        if "escape" in event.getKeys(keyList=["escape"]):
+            self.abort()
+
+    # ------------------------------------------------------------------ 图标
+    def _build_icons(self):
+        """效能反馈用的两个图标（位置比实验1更低、更小，因为要和得分同屏）。
+
+        按键 = 三层叠出的实体键帽（深侧壁 + 浅顶面 + 标签）；骰子 = 方格 + 三点。
+        想换成自己的图：把 CFG["BTN_ICON_IMG"] 指向透明底 PNG。
+        """
+        f = CFG["FONT"]
+        cy = -0.075
+        img = CFG.get("BTN_ICON_IMG", "")
+        self.btn_img = None
+        if img and os.path.isfile(img):
+            self.btn_img = visual.ImageStim(self.win, image=img, size=(0.115, 0.115), pos=(0, cy))
+        else:
+            self.btn_base = visual.Rect(self.win, width=0.178, height=0.066,
+                                        fillColor=(0.30, 0.30, 0.30), lineColor=None,
+                                        pos=(0, cy - 0.009))
+            self.btn_face = visual.Rect(self.win, width=0.170, height=0.050,
+                                        fillColor=(0.90, 0.90, 0.90),
+                                        lineColor=(0.62, 0.62, 0.62), lineWidth=1,
+                                        pos=(0, cy + 0.003))
+            self.btn_txt = visual.TextStim(self.win, CFG["BTN_LABEL"], font=f,
+                                           color=(-0.85, -0.85, -0.85), bold=True,
+                                           height=0.026, pos=(0, cy + 0.001))
+        self.dice_rect = visual.Rect(self.win, width=0.100, height=0.100,
+                                     fillColor=(0.92, 0.92, 0.92), lineColor=(-1, -1, -1),
+                                     lineWidth=2, pos=(0, cy))
+        self.dice_dots = [
+            visual.Circle(self.win, radius=0.008, fillColor=(-1, -1, -1), lineColor=None,
+                          pos=(0 + dx, cy + dy))
+            for dx, dy in ((-0.023, 0.023), (0.0, 0.0), (0.023, -0.023))
+        ]
+
+    def _draw_button_icon(self):
+        if self.btn_img is not None:
+            self.btn_img.draw()
+            return
+        self.btn_base.draw()
+        self.btn_face.draw()
+        if CFG["BTN_LABEL"]:
+            self.btn_txt.draw()
+
+    def _draw_dice(self):
+        self.dice_rect.draw()
+        for d in self.dice_dots:
+            d.draw()
+
+    # ------------------------------------------------------------------ 区段反馈
+    def _fb_interval(self, score, eff_type, practice=False):
+        """区段反馈（2.2）：本次得多少分 + 分数是否取决于表现，共 1500ms。"""
+        if score > 0:
+            self.fb_score.text = "+%d 分" % int(round(score))
+            self.fb_score.setColor((0.5, 1.0, 0.5))
+        else:
+            self.fb_score.text = "+0 分"
+            self.fb_score.setColor((0.8, 0.8, 0.8))
+        self.fb_score.draw()
+
+        if eff_type == "performance":
+            self._draw_button_icon()
+            self.fb_icon_lab.text = "本次得分取决于你的表现"
+        else:
+            self._draw_dice()
+            self.fb_icon_lab.text = "本次得分是随机决定的"
+        if CFG["SHOW_EFF_LABEL"]:
+            self.fb_icon_lab.draw()
+
+        if CFG["SHOW_TOTAL_SCORE"] and not practice:
+            self.fb_total.text = "累计 %d 分" % int(round(self.total_score))
+            self.fb_total.draw()
+
+        self.win.flip()
+        core.wait(CFG["FB_DUR"])
+        self.check_escape()
+
+    # ------------------------------------------------------------------ 单试次
+    def make_trial_content(self):
+        """抽一个试次的内容：图片 + 叠加词 + 一致性条件。"""
+        pic = self.rng.choice(CFG["FRUITS"])
+        if self.rng.random() < CFG["COND_RATIO"]:
+            cond, word = "congruent", CFG["FRUIT_CN"][pic]
+        else:
+            others = [x for x in CFG["FRUITS"] if x != pic]
+            cond, word = "incongruent", CFG["FRUIT_CN"][self.rng.choice(others)]
+        return pic, word, cond
+
+    def run_free_trial(self, sub_idx, t_end, phase, interval_idx, window):
+        """自由反应区段里的一个试次：图+词一直呈现到按键或窗口结束。
+
+        没有单试次时限——这是实验2与实验1最大的区别；超时只发生在整个窗口结束时。
+        """
+        pic, word, cond = self.make_trial_content()
+        self.pic = self.pic_stims[pic]
+        self.word.text = word
+
+        started = self.int_clock.getTime()
+        self.kb_clock.reset()
+        event.clearEvents()
+        self.pic.draw()
+        self.word.draw()
+        self.win.flip()
+
+        remain = max(0.05, t_end - self.int_clock.getTime())
+        k = event.waitKeys(maxWait=remain, keyList=self.keys + ["escape"],
+                           timeStamped=self.kb_clock)
+        if k and k[0][0] == "escape":
+            self.abort()
+        resp_key = k[0][0] if k else ""
+        rt = float(k[0][1]) if k else None
+
+        correct_key = CFG["KEYS"][pic]
+        row = dict(
+            被试=self.subj, 组别=self.group, 阶段=phase,
+            区段=("" if interval_idx is None else interval_idx + 1),
+            区段内序号=sub_idx, 窗口s=window,
+            区段内开始时刻s=round(started, 3),
+            条件=cond, 图片=CFG["FRUIT_CN"][pic], 图片代号=pic, 词=word,
+            正确键=correct_key, 反应键=resp_key, 正确=int(resp_key == correct_key),
+            反应时=("" if rt is None else round(rt, 4)),
+            过快=int(rt is not None and rt < 0.25),   # DDM 分析按原文剔除 RT<250ms
+        )
+        self.rows_trials.append(row)
+        return row
+
+    # ------------------------------------------------------------------ 区段
+    def run_interval(self, idx, window, eff_type=None, p_eff=None, practice=False, phase="main"):
+        """跑一个区段：注视点 → 自由作答窗口 → 反馈（2.2）。"""
+        # 1) 注视点 1000/1500/2000ms
+        self.fix.draw()
+        self.win.flip()
+        core.wait(self.rng.choice(CFG["FIX_CHOICES"]))
+
+        # 2) 自由作答窗口：窗口内能做几个试次由被试自己决定
+        self.int_clock.reset()
+        n_done = 0
+        n_correct = 0
+        conds = []
+        while True:
+            if (window - self.int_clock.getTime()) < CFG["MIN_TRIAL_TIME"]:
+                break
+            row = self.run_free_trial(n_done + 1, window, phase, idx, window)
+            n_done += 1
+            n_correct += int(row["正确"])
+            conds.append(row["条件"])
+            if not row["反应键"]:
+                break                                  # 窗口结束（没作答）
+            if CFG["ISI_BETWEEN"] > 0:
+                if (window - self.int_clock.getTime()) >= CFG["MIN_TRIAL_TIME"]:
+                    self.win.flip()                    # 空屏，避免连击被算到下一试次
+                    core.wait(CFG["ISI_BETWEEN"])
+
+        elapsed = self.int_clock.getTime()
+
+        # 3) 计分（2.2）：表现区段 = 真实得分；随机区段 = 从 yoking 窗口抽
+        if practice:
+            score = float(n_correct * CFG["POINT_PER_CORRECT"])
+            source = "练习"
+        elif eff_type == "performance":
+            score = float(n_correct * CFG["POINT_PER_CORRECT"])
+            self.yoke.add(score)
+            self.total_score += score
+            source = "表现"
+        else:
+            score = self.yoke.sample(self.rng)
+            self.total_score += score
+            source = "抽取"
+        self._fb_interval(score, eff_type, practice=practice)
+
+        n_cong = sum(1 for c in conds if c == "congruent")
+        row = dict(
+            被试=self.subj, 组别=self.group, 阶段=phase,
+            区段=("" if idx is None else idx + 1),
+            窗口s=window, 实际用时s=round(elapsed, 3),
+            试次数=n_done, 正确数=n_correct,
+            正确率=(round(n_correct / float(n_done), 3) if n_done else ""),
+            一致比例=(round(n_cong / float(n_done), 3) if n_done else ""),
+            效能概率=("" if p_eff is None else round(float(p_eff), 4)),
+            效能类型=("" if eff_type is None else eff_type),
+            得分来源=source, 区段得分=round(score, 2),
+            累计得分=round(self.total_score, 2),
+        )
+        self.rows_intervals.append(row)
+        return row
+
+    # ------------------------------------------------------------------ 主观探针
+    def run_probe(self, kind, after_interval):
+        if kind == "efficacy":
+            q = "你认为你当前的得分在多大程度上取决于你的表现？"
+            lab_l, lab_r = "完全不由表现决定", "完全由表现决定"
+        else:
+            q = "你认为你当前获得的分数有多高？"
+            lab_l, lab_r = "很低", "很高"
+
+        self.probe_q.text = q
+        self.probe_lab_l.text = lab_l
+        self.probe_lab_r.text = lab_r
+        self.win.setMouseVisible(True)
+        mouse = MouseClass(win=self.win)
+        x_lo, x_hi = -0.30, 0.30
+        x = 0.0
+        moved = False
+        t0 = core.getTime()
+
+        while True:
+            self.check_escape()
+            if mouse_left_pressed(mouse):
+                mx, my = mouse.getPos()
+                if abs(my - (-0.04)) < 0.14:      # 只在量表条附近才算有效拖动
+                    nx = min(max(mx, x_lo), x_hi)
+                    if abs(nx - x) > 1e-4:
+                        moved = True
+                    x = nx
+            keys = event.getKeys(keyList=["space", "escape", "left", "right"])
+            if "left" in keys:                    # 键盘兜底：鼠标失灵也能作答
+                x = max(x_lo, x - 0.02)
+                moved = True
+            if "right" in keys:
+                x = min(x_hi, x + 0.02)
+                moved = True
+            if "escape" in keys:
+                self.abort()
+            if "space" in keys and moved:
+                break
+
+            self.probe_q.draw()
+            self.probe_line.draw()
+            self.probe_lab_l.draw()
+            self.probe_lab_r.draw()
+            self.probe_hint.draw()
+            self.probe_mark.pos = (x, -0.04)
+            self.probe_mark.draw()
+            if CFG["SHOW_VAS_NUMBER"]:
+                self.probe_num.text = "%d" % round((x - x_lo) / (x_hi - x_lo) * 100)
+                self.probe_num.draw()
+            self.win.flip()
+
+        value = (x - x_lo) / (x_hi - x_lo) * 100.0
+        self.win.setMouseVisible(False)
+        core.wait(0.2)
+        self.rows_probes.append(dict(
+            被试=self.subj, 组别=self.group, 探针类型=kind,
+            插入位置=("" if after_interval is None else after_interval + 1),
+            评价值=round(value, 2), 用时s=round(core.getTime() - t0, 3),
+            累计得分=round(self.total_score, 2),
+        ))
+
+    # ------------------------------------------------------------------ 练习
+    def _practice_trial(self, pic, word, timeout=None, with_fb=True, phase="prac"):
+        """练习用的单试次：注视点 → 图(+词) → 正误反馈。"""
+        timeout = CFG["PRAC_TIMEOUT"] if timeout is None else timeout
+        self.fix.draw()
+        self.win.flip()
+        core.wait(self.rng.uniform(0.4, 0.7))
+
+        self.pic = self.pic_stims[pic]
+        self.word.text = word
+        self.kb_clock.reset()
+        event.clearEvents()
+        self.pic.draw()
+        if word:
+            self.word.draw()
+        self.win.flip()
+        k = event.waitKeys(maxWait=timeout, keyList=self.keys + ["escape"],
+                           timeStamped=self.kb_clock)
+        if k and k[0][0] == "escape":
+            self.abort()
+        resp_key = k[0][0] if k else ""
+        rt = float(k[0][1]) if k else None
+        ok = int(resp_key == CFG["KEYS"][pic])
+
+        if with_fb:
+            if not resp_key:
+                self.fb_acc.text = "太慢"
+                self.fb_acc.setColor((0.9, 0.9, 0.9))
+            elif ok:
+                self.fb_acc.text = "正确"
+                self.fb_acc.setColor((0.5, 1.0, 0.5))
+            else:
+                self.fb_acc.text = "错误"
+                self.fb_acc.setColor((1.0, 0.5, 0.5))
+            self.fb_acc.draw()
+            self.win.flip()
+            core.wait(0.6)
+            self.check_escape()
+
+        self.rows_trials.append(dict(
+            被试=self.subj, 组别=self.group, 阶段=phase,
+            区段="", 区段内序号="", 窗口s=timeout, 区段内开始时刻s="",
+            条件=("mapping" if not word else ("congruent" if word == CFG["FRUIT_CN"][pic]
+                                            else "incongruent")),
+            图片=CFG["FRUIT_CN"][pic], 图片代号=pic, 词=word,
+            正确键=CFG["KEYS"][pic], 反应键=resp_key, 正确=ok,
+            反应时=("" if rt is None else round(rt, 4)),
+            过快=int(rt is not None and rt < 0.25),
+        ))
+        return ok
+
+    def practice_mapping(self):
+        self.wait_space(
+            "练习 1 / 3：水果—按键\n\n"
+            "屏幕中央会出现一种水果的图片，请判断它是哪种水果，并按下对应按键：\n\n"
+            "        苹果 → D      梨 → F      柠檬 → J      桃 → K\n\n"
+            "（左手食指/中指按 D/F，右手食指/中指按 J/K）\n\n"
+            "按 空格 开始。", height=0.038)
+        seq = []
+        while len(seq) < CFG["N_PRAC1"]:
+            seq += list(CFG["FRUITS"])
+        seq = seq[:CFG["N_PRAC1"]]
+        self.rng.shuffle(seq)
+        for pic in seq:
+            self._practice_trial(pic, "", phase="prac1")
+
+    def practice_picture_word(self):
+        self.wait_space(
+            "练习 2 / 3：图片上会叠一个词\n\n"
+            "接下来水果图片中央会叠印一个水果词。\n"
+            "注意：请判断【图片】是哪种水果，**忽略文字**。\n\n"
+            "例如：画的是苹果、上面写着“梨” → 按 D（苹果）\n\n"
+            "按 空格 开始。", height=0.038)
+        for _ in range(CFG["N_PRAC2"]):
+            pic, word, _cond = self.make_trial_content()
+            self._practice_trial(pic, word, phase="prac2")
+
+    def practice_free_window(self):
+        self.wait_space(
+            "练习 3 / 3：自由作答窗口\n\n"
+            "这一部分和实验1不一样：每一“段”会给你一个固定的作答时间窗（比如 3 秒），\n"
+            "窗口里你能做几道题就做几道，想做多少由你自己决定——没有单题时限。\n\n"
+            "窗口一结束会立刻结算：显示这一段得了多少分，以及这次的分数\n"
+            "是“取决于你的表现”还是“随机决定”。\n\n"
+            "提示：越早按、做得越多，分数越高；但按错不得分，所以也别乱按。\n\n"
+            "按 空格 开始。", height=0.036)
+        for i in range(CFG["N_PRAC3"]):
+            eff = "performance" if i % 2 == 0 else "random"
+            self.run_interval(None, CFG["PRAC_WINDOW"], eff_type=eff,
+                              p_eff=None, practice=True, phase="prac3")
+
+    # ------------------------------------------------------------------ 休息
+    def show_break(self, done, total):
+        self.wait_space(
+            "休息一下\n\n已完成 %d / %d 个区段\n累计得分：%d 分\n\n"
+            "准备好后按 空格 继续。" % (done, total, int(round(self.total_score))),
+            height=0.042)
+
+    # ------------------------------------------------------------------ 正式任务
+    def run_main(self):
+        if CFG.get("SKIP_PRACTICE", False):
+            rules = ("任务：屏幕会先出现一个十字，然后出现水果图片（中央叠印一个水果词），\n"
+                     "请判断【图片】是哪种水果、忽略文字，按 D F J K。\n"
+                     "        苹果 → D    梨 → F    柠檬 → J    桃 → K\n\n")
+        else:
+            rules = "规则与刚才相同：判断图片是什么水果、忽略文字，按 D F J K。\n\n"
+        self.wait_space(
+            "正式任务开始\n\n" + rules +
+            "每段会给你一个作答窗口，窗口内能做几道做几道，窗口结束才结算分数。\n"
+            "按对一题 +10 分。\n\n"
+            "任务中会不时弹出滑块问题，请根据你**当下**的感受作答。\n\n"
+            "共 %d 个区段，约 35–40 分钟，中途可以休息。\n按 空格 开始。"
+            % CFG["N_INTERVALS"], height=0.036)
+
+        n = CFG["N_INTERVALS"]
+        p_traj = make_trajectory(n, CFG["P_MIN"], CFG["P_MAX"], self.traj_seed,
+                                 reverse=self.reverse, smooth_frac=CFG["TRAJ_SMOOTH"])
+        windows = make_score_schedule(n, self.rng)
+        probes = make_probe_schedule(n, CFG["PROBE_EVERY"], self.rng)
+
+        for i in range(n):
+            if CFG["BREAK_EVERY"] and i > 0 and i % CFG["BREAK_EVERY"] == 0:
+                self.show_break(i, n)
+            p = float(p_traj[i])
+            eff_type = "performance" if self.rng.random() < p else "random"
+            self.run_interval(i, windows[i], eff_type=eff_type, p_eff=p, phase="main")
+            if i in probes:
+                self.run_probe(probes[i], after_interval=i)
+            if i % 10 == 0:                    # 每 10 区段落盘一次，防崩溃丢数据
+                self.save()
+
+        self.wait_space(
+            "实验结束，谢谢参与！\n\n总得分：%d 分\n\n按 空格 退出。"
+            % int(round(self.total_score)), height=0.045)
+
+    # ------------------------------------------------------------------ 主流程
+    def run(self):
+        while not self.confirm_info():
+            self.update_info(ask_info(prev=self.info))
+        if not CFG.get("SKIP_PRACTICE", False):
+            self.practice_mapping()
+            self.practice_picture_word()
+            self.practice_free_window()
+        self.run_main()
+        self.save(verbose=True)
+        self.win.close()
+        core.quit()
+
+
+# ==============================================================================
+#  五、入口
+# ==============================================================================
+def auto_subject_id():
+    """编号留空时自动生成，例如 S11211930。"""
+    return "S" + datetime.now().strftime("%m%d%H%M")
+
+
+def ask_info(prev=None):
+    """实验前的被试信息登记表（Qt 对话框，支持中文输入法直接打姓名）。
+
+    “漂移方向”选“自动”时按编号末位奇偶分配（奇数→正向，偶数→反向），
+    这样单双号被试自然对半，不用手工平衡。
+    """
+    prev = prev or {}
+    dlg = gui.DlgFromDict(
+        dictionary={
+            "姓名": prev.get("姓名", ""),
+            "被试编号": prev.get("被试编号", ""),
+            "年龄": prev.get("年龄", ""),
+            "性别": prev.get("性别", "女"),
+            "漂移方向": ["自动（按编号奇偶）", "正向", "反向"],
+        },
+        title="实验2：图片—词 + 自由反应 + 漂移效能 —— 请填写被试信息",
+        order=["姓名", "被试编号", "年龄", "性别", "漂移方向"],
+    )
+    if not dlg.OK:
+        core.quit()
+    info = dict(dlg.data)
+    info["姓名"] = str(info.get("姓名", "")).strip() or "匿名"
+    info["被试编号"] = str(info.get("被试编号", "")).strip() or auto_subject_id()
+    info["年龄"] = str(info.get("年龄", "")).strip()
+    return info
+
+
+if __name__ == "__main__":
+    info = ask_info()
+    exp = FruitEffortExp(info)
+    try:
+        exp.run()
+    except SystemExit:
+        pass
+    except BaseException:
+        # 中途崩了也别丢数据：落盘 + 把 traceback 写进 error.log
+        import traceback
+        tb = traceback.format_exc()
+        print(tb)
+        try:
+            exp.save(verbose=True)
+        except Exception:
+            pass
+        for folder in (getattr(exp, "outdir", None),
+                       os.path.dirname(os.path.abspath(__file__))):
+            if not folder:
+                continue
+            try:
+                path = os.path.join(folder, "error.log")
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(tb)
+                print("错误已写入：", path)
+                break
+            except Exception:
+                continue
+        raise
