@@ -393,15 +393,17 @@ class StroopEfficacyExp:
                 )
 
         main_rows = [r for r in self.rows_intervals if r["阶段"] == "main"]
-        scores = [float(r["区段得分"]) for r in main_rows]
+        scored_rows = [r for r in main_rows if r["区段得分"] != ""]
+        scores = [r["区段得分"] for r in scored_rows]
         main_trials = [r for r in self.rows_trials if r["阶段"] == "main"]
         meta = dict(
             姓名=self.name, 被试编号=self.subj, 年龄=self.info.get("年龄", ""),
             性别=self.info.get("性别", ""), 漂移方向=self.group,
-            区段数=len(main_rows), 总分=round(self.total_score, 1),
+            区段数=len(scored_rows), 中断区段数=sum(bool(r["中断阶段"]) for r in main_rows),
+            总分=round(self.total_score, 1),
             平均每区段得分=(round(statistics.mean(scores), 2) if scores else ""),
-            平均每区段试次数=(round(statistics.mean([int(r["试次数"]) for r in main_rows]), 2)
-                              if main_rows else ""),
+            平均每区段试次数=(round(statistics.mean([r["试次数"] for r in scored_rows]), 2)
+                              if scored_rows else ""),
             yoking窗口均值=round(self.yoke.mean(), 2),
             轨迹种子=self.traj_seed, 效能下限=CFG["P_MIN"], 效能上限=CFG["P_MAX"],
             每对一次得分=CFG["POINT_PER_CORRECT"], 窗口长度选项=list(CFG["WINDOW_CHOICES"]),
@@ -513,7 +515,7 @@ class StroopEfficacyExp:
             self.fb_total.draw()
 
         if self._wait_until_or_escape(deadline):
-            self.abort()
+            return None, None, True
         onset = float(self.win.flip())
         interrupted = self._wait_until_or_escape(onset + CFG["FB_DUR"])
         offset = float(self.win.flip())
@@ -603,23 +605,33 @@ class StroopEfficacyExp:
             score = history.sample(self.rng)
             source = "抽取"
         feedback_on, feedback_off, interrupted = self._fb_interval(score, eff_type, deadline, practice=practice)
-        if eff_type == "performance":
-            history.add(score)
-        if not practice:
-            self.total_score += score
+        feedback_shown = feedback_on is not None
+        window_end = deadline
+        if feedback_shown:
+            if eff_type == "performance":
+                history.add(score)
+            if not practice:
+                self.total_score += score
+        else:
+            window_end = min(deadline, float(logging.defaultClock.getTime()))
 
         row = dict(
             被试=self.subj, 组别=self.group, 阶段=phase,
             区段=("" if idx is None else idx + 1),
-            窗口s=window, 实际用时s=round(feedback_on - interval_start, 4),
+            窗口s=window, 作答窗用时s=round(window_end - interval_start, 6),
             注视翻屏时刻s=fixation_on, 区段开始时刻s=interval_start, 区段截止时刻s=deadline,
-            反馈翻屏时刻s=feedback_on, 反馈结束时刻s=feedback_off, 反馈中断=int(interrupted),
+            反馈翻屏时刻s=feedback_on, 反馈结束时刻s=feedback_off,
+            反馈延迟s=(round(feedback_on - deadline, 6) if feedback_shown else ""),
+            反馈时长s=(round(feedback_off - feedback_on, 6) if feedback_shown else ""),
+            中断阶段=(("反馈中" if feedback_shown else "反馈前") if interrupted else ""),
+            反馈中断=int(interrupted and feedback_shown),
             试次数=n_done, 正确数=n_correct,
             正确率=(round(n_correct / float(n_done), 3) if n_done else ""),
             一致比例=(round(n_congruent / float(n_done), 3) if n_done else ""),
             效能概率=("" if p_eff is None else round(float(p_eff), 4)),
             效能类型=eff_type,
-            得分来源=source, 区段得分=round(score, 2),
+            得分来源=(source if feedback_shown else ""),
+            区段得分=(round(score, 2) if feedback_shown else ""),
             累计得分=round(self.total_score, 2),
         )
         self.rows_intervals.append(row)

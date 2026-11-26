@@ -148,51 +148,88 @@ def check_interface_keys(exp):
         exp.run_probe("efficacy", after_interval=0)
     assert exp.rows_probes[-1]["评价值"] > 50
 
+    for pressed in (False, True):
+        assert task.mouse_left_pressed(SimpleNamespace(getPressed=lambda: [pressed])) is pressed
+        assert task.mouse_left_pressed(SimpleNamespace(getLeftButtonPressed=lambda: pressed)) is pressed
+
+
+def check_feedback_interruptions(exp):
+    original_flip = exp.win.flip
     original_draw = exp.fb_source.draw
-    show_feedback = False
-    aborted = False
+    original_target = exp._present_target
 
-    def feedback_draw():
-        nonlocal show_feedback
-        original_draw()
-        show_feedback = True
+    def present_with_response(ink, word):
+        onset = original_target(ink, word)
+        exp.keyboard.queue(task.CFG["KEYS"][ink], onset + 0.12)
+        return onset
 
-    def feedback_flip():
-        nonlocal show_feedback
-        timestamp = float(original_flip())
-        if show_feedback:
-            exp.keyboard.queue("escape", timestamp + 0.075, released=True)
-            show_feedback = False
-        return timestamp
+    for interrupt_during_feedback in (False, True):
+        pending_feedback = False
 
-    with TemporaryDirectory() as directory:
-        exp.outdir = directory
-        with (patch.object(exp.fb_source, "draw", feedback_draw),
-              patch.object(exp.win, "flip", feedback_flip),
-              patch.object(exp.win, "close") as close,
-              patch.object(task.core, "quit", side_effect=SystemExit)):
-            try:
-                exp.run_interval(0, 0.6, "random")
-            except SystemExit:
-                aborted = True
-            assert aborted
-            close.assert_called_once()
-        row = exp.rows_intervals[-1]
-        assert row["反馈中断"] == 1
-        feedback_duration = row["反馈结束时刻s"] - row["反馈翻屏时刻s"]
-        assert 0.075 <= feedback_duration < 0.250
-        with (Path(directory) / "intervals.csv").open(encoding="utf-8-sig", newline="") as stream:
-            saved = list(csv.DictReader(stream))[-1]
-        assert saved["反馈中断"] == "1"
-        assert saved["反馈结束时刻s"] == f"{row['反馈结束时刻s']:.6f}"
-        meta = json.loads((Path(directory) / "meta.json").read_text(encoding="utf-8"))
-        assert meta["实测刷新率Hz"] == exp.refresh_hz
-        assert meta["出题估计帧长s"] == exp.frame_period
-    print(
-        f"UI input and feedback interruption checks passed. "
-        f"Esc ended feedback after {1000 * feedback_duration:.1f} ms. "
-        f"Measured refresh rate: {exp.refresh_hz!r} Hz."
-    )
+        def feedback_draw():
+            nonlocal pending_feedback
+            original_draw()
+            if interrupt_during_feedback:
+                pending_feedback = True
+            else:
+                stop_at = float(task.logging.defaultClock.getTime()) + 0.075
+                exp.keyboard.queue("escape", stop_at, released=True)
+
+        def feedback_flip():
+            nonlocal pending_feedback
+            timestamp = float(original_flip())
+            if pending_feedback:
+                exp.keyboard.queue("escape", timestamp + 0.075, released=True)
+                pending_feedback = False
+            return timestamp
+
+        before_total = exp.total_score
+        before_history = list(exp.yoke.buf)
+        before_intervals = len(exp.rows_intervals)
+        with TemporaryDirectory() as directory:
+            exp.outdir = directory
+            with (patch.object(exp.fb_source, "draw", feedback_draw),
+                  patch.object(exp, "_present_target", present_with_response),
+                  patch.object(exp.win, "flip", feedback_flip),
+                  patch.object(exp.win, "close") as close,
+                  patch.object(task.core, "quit", side_effect=SystemExit)):
+                try:
+                    exp.run_interval(900 + int(interrupt_during_feedback), 0.6, "performance")
+                except SystemExit:
+                    close.assert_called_once()
+                else:
+                    raise AssertionError("Esc did not interrupt the interval")
+
+            assert len(exp.rows_intervals) == before_intervals + 1
+            row = exp.rows_intervals[-1]
+            assert row["试次数"] == row["正确数"] == 1
+            assert row["反馈中断"] == int(interrupt_during_feedback)
+            with (Path(directory) / "intervals.csv").open(encoding="utf-8-sig", newline="") as stream:
+                intervals = list(csv.DictReader(stream))
+            saved = intervals[-1]
+            meta = json.loads((Path(directory) / "meta.json").read_text(encoding="utf-8"))
+            assert meta["实测刷新率Hz"] == exp.refresh_hz
+            assert meta["出题估计帧长s"] == exp.frame_period
+            assert meta["总分"] == float(saved["累计得分"])
+            assert meta["总分"] == sum(float(r["区段得分"]) for r in intervals
+                                       if r["阶段"] == "main" and r["区段得分"] != "")
+            assert meta["中断区段数"] == sum(bool(r["中断阶段"]) for r in intervals if r["阶段"] == "main")
+            if interrupt_during_feedback:
+                assert saved["中断阶段"] == "反馈中"
+                assert 0.075 <= row["反馈时长s"] < 0.250
+                assert row["反馈延迟s"] >= 0
+                assert saved["反馈结束时刻s"] == f"{row['反馈结束时刻s']:.6f}"
+                assert row["作答窗用时s"] == 0.6
+                assert exp.total_score == before_total + 10
+                assert exp.yoke.buf[-1] == 10
+            else:
+                assert saved["中断阶段"] == "反馈前"
+                assert saved["反馈翻屏时刻s"] == saved["区段得分"] == ""
+                assert 0 < row["作答窗用时s"] < 0.6
+                assert exp.total_score == before_total
+                assert list(exp.yoke.buf) == before_history
+    print("UI input, both mouse APIs, and abort saving before and during feedback passed.")
+
 
 def run_intervals(args):
     if args.studio:
@@ -292,6 +329,9 @@ def run_intervals(args):
                 feedback_duration = interval["反馈结束时刻s"] - interval["反馈翻屏时刻s"]
                 assert interval["区段开始时刻s"] == first_on
                 assert interval["区段截止时刻s"] == end
+                assert interval["作答窗用时s"] == duration
+                assert math.isclose(interval["反馈延迟s"], feedback_delay, abs_tol=0.00000051)
+                assert math.isclose(interval["反馈时长s"], feedback_duration, abs_tol=0.00000051)
                 assert math.isclose(end - first_on, duration, abs_tol=1e-9)
                 tolerance = max(2 * exp.frame_period, 0.025)
                 within_tolerance = (
@@ -333,6 +373,7 @@ def run_intervals(args):
         text_stim = task.visual.TextStim if args.studio else VirtualStim
         with patch.object(task.visual, "TextStim", text_stim):
             check_interface_keys(exp)
+        check_feedback_interruptions(exp)
     finally:
         window.close()
 
