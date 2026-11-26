@@ -17,7 +17,8 @@ from collections import Counter, deque
 from datetime import datetime
 from pathlib import Path
 
-from psychopy import visual, core, event, gui
+from psychopy import visual, core, event, gui, logging
+from psychopy.hardware.keyboard import Keyboard
 
 try:  # 老接口优先：event.Mouse 方法齐全（getPressed / getPos），新版 PsychoPy 仍提供
     MouseClass = event.Mouse
@@ -120,8 +121,8 @@ CFG = {
     "FIX_CHOICES": (1.0, 1.5, 2.0),        # 注视点随机 1000/1500/2000ms
     "WINDOW_CHOICES": (2.0, 3.0, 4.0),     # 作答窗口随机 2000/3000/4000ms
     "FB_DUR": 1.5,                         # 区段反馈 1500ms
-    "ISI_BETWEEN": 0.15,                   # 区段内两个试次之间的空屏（防连击误触）
-    "MIN_TRIAL_TIME": 0.35,                # 窗口剩余不足这么久就不开新试次
+    "ISI_BETWEEN": 0.25,                   # 题间空屏，以作者分析脚本的参数作开发基线
+    "MIN_TRIAL_TIME": 0.35,                # 剩余可呈现时间不足时留空到截止
 
     # ---------- 区段构成（2.2）----------
     "N_INTERVALS": 288,
@@ -265,10 +266,14 @@ class StroopEfficacyExp:
         self.traj_seed = CFG["TRAJ_SEED"]
         self.rng.seed("%s-%s" % (self.subj, self.group))   # 每个被试可复现
 
+        self.keyboard = Keyboard(backend="ptb")
+        if self.keyboard.getBackend() != "ptb":
+            raise RuntimeError("需要 PsychoPy Studio 的 Psychtoolbox 键盘后端来记录按键时间。")
+
         core.checkPygletDuringWait = False
         self.win = visual.Window(
             size=(1280, 800), fullscr=CFG["FULLSCR"], color=CFG["BG_COLOR"],
-            units="height", allowGUI=False, checkTiming=False,
+            units="height", allowGUI=False, checkTiming=False, waitBlanking=True,
         )
         self.win.setMouseVisible(False)
 
@@ -306,9 +311,7 @@ class StroopEfficacyExp:
                                          pos=(0, 0.10))
 
         # ---- 运行时状态 ----
-        self.kb_clock = core.Clock()
-        self.int_clock = core.Clock()
-        self.keys = list(CFG["KEYS"].values())
+        self.response_keys = [*CFG["KEYS"].values(), "escape"]
         self.yoke = YokeWindow()
         self.total_score = 0.0
         self.rows_trials = []
@@ -396,6 +399,7 @@ class StroopEfficacyExp:
             正式刺激作答计数=stimulus_counts(r for r in main_trials if r["反应键"]),
             版本="stroop-efficacy-dev", 代码版本=self.code_commit,
             脚本SHA256=self.script_hash, 运行参数=CFG,
+            定时键盘后端=self.keyboard.getBackend(),
         )
         with open(os.path.join(self.outdir, "meta.json"), "w", encoding="utf-8") as fh:
             json.dump(meta, fh, ensure_ascii=False, indent=2)
@@ -425,8 +429,32 @@ class StroopEfficacyExp:
         if "escape" in event.getKeys(keyList=["escape"]):
             self.abort()
 
+    @staticmethod
+    def _wait_until(timestamp):
+        core.wait(max(0.0, timestamp - logging.defaultClock.getTime()))
+
+    def _clear_response_buffer(self):
+        if self.keyboard.getKeys(keyList=["escape"], waitRelease=False):
+            self.abort()
+        self.keyboard.clearEvents()
+
+    def _wait_for_response(self, onset, deadline):
+        """翻屏和 PTB 按下时刻共用 PsychoPy 的日志时钟。"""
+        while True:
+            poll_time = logging.defaultClock.getTime()
+            keys = self.keyboard.getKeys(keyList=self.response_keys, waitRelease=False)
+            if any(press.name == "escape" for press in keys):
+                self.abort()
+            for press in sorted(keys, key=lambda key: key.tDown):
+                if onset <= press.tDown < deadline:
+                    return press.name, press.tDown
+            if poll_time >= deadline:
+                return "", None
+            # 在截止后还会检查一次队列，按键的实际时刻决定是否有效。
+            self._wait_until(min(poll_time + 0.001, deadline))
+
     # ------------------------------------------------------------------ 区段反馈
-    def _fb_interval(self, score, eff_type, practice=False):
+    def _fb_interval(self, score, eff_type, deadline, practice=False):
         """区段反馈（2.2）：本次得多少分 + 分数是否取决于表现，共 1500ms。"""
         if score > 0:
             self.fb_score.text = "+%d 分" % int(round(score))
@@ -446,9 +474,11 @@ class StroopEfficacyExp:
             self.fb_total.text = "累计 %d 分" % int(round(self.total_score))
             self.fb_total.draw()
 
-        self.win.flip()
-        core.wait(CFG["FB_DUR"])
-        self.check_escape()
+        self._wait_until(deadline)
+        onset = float(self.win.flip())
+        self._wait_until(onset + CFG["FB_DUR"])
+        offset = float(self.win.flip())
+        return onset, offset
 
     # ------------------------------------------------------------------ 单试次
     def make_trial_content(self):
@@ -460,32 +490,28 @@ class StroopEfficacyExp:
         word_color = self.rng.choice(other_colors)
         return ink, CFG["WORD"][word_color], "incongruent"
 
-    def run_free_trial(self, sub_idx, t_end, phase, interval_idx, window):
+    def run_free_trial(self, sub_idx, interval_start, phase, interval_idx, window):
         """呈现一道色词题，接受作答直到区段结束。"""
         ink, word, cond = self.make_trial_content()
         self.word.text = word
         self.word.color = CFG["COLOR_RGB"][ink]
 
-        started = self.int_clock.getTime()
-        self.kb_clock.reset()
-        event.clearEvents()
+        self._clear_response_buffer()
         self.word.draw()
-        self.win.flip()
-
-        remain = max(0.05, t_end - self.int_clock.getTime())
-        k = event.waitKeys(maxWait=remain, keyList=self.keys + ["escape"],
-                           timeStamped=self.kb_clock)
-        if k and k[0][0] == "escape":
-            self.abort()
-        resp_key = k[0][0] if k else ""
-        rt = float(k[0][1]) if k else None
+        onset = float(self.win.flip())
+        start = onset if interval_start is None else interval_start
+        deadline = start + window
+        resp_key, pressed_at = self._wait_for_response(onset, deadline)
+        rt = None if pressed_at is None else pressed_at - onset
 
         correct_key = CFG["KEYS"][ink]
         row = dict(
             被试=self.subj, 组别=self.group, 阶段=phase,
             区段=("" if interval_idx is None else interval_idx + 1),
             区段内序号=sub_idx, 窗口s=window,
-            区段内开始时刻s=round(started, 3),
+            区段内开始时刻s=round(onset - start, 4),
+            目标翻屏时刻s=onset, 作答截止时刻s=deadline,
+            按键时刻s=("" if pressed_at is None else pressed_at),
             条件=cond, 词=word, 墨色=ink,
             正确键=correct_key, 反应键=resp_key, 正确=int(resp_key == correct_key),
             反应时=("" if rt is None else round(rt, 4)),
@@ -497,31 +523,36 @@ class StroopEfficacyExp:
     # ------------------------------------------------------------------ 区段
     def run_interval(self, idx, window, eff_type, p_eff=None, phase="main", practice_yoke=None):
         """跑一个区段：注视点 → 自由作答窗口 → 反馈（2.2）。"""
-        # 1) 注视点 1000/1500/2000ms
         self.fix.draw()
-        self.win.flip()
-        core.wait(self.rng.choice(CFG["FIX_CHOICES"]))
+        fixation_on = float(self.win.flip())
+        self._wait_until(fixation_on + self.rng.choice(CFG["FIX_CHOICES"]))
 
-        # 2) 自由作答窗口：窗口内能做几个试次由被试自己决定
-        self.int_clock.reset()
+        interval_start = None
         n_done = 0
         n_correct = 0
         conds = []
+        frame_period = self.win.monitorFramePeriod
         while True:
-            if (window - self.int_clock.getTime()) < CFG["MIN_TRIAL_TIME"]:
-                break
-            row = self.run_free_trial(n_done + 1, window, phase, idx, window)
+            row = self.run_free_trial(n_done + 1, interval_start, phase, idx, window)
+            if interval_start is None:
+                interval_start = row["目标翻屏时刻s"]
+            deadline = row["作答截止时刻s"]
             n_done += 1
             n_correct += int(row["正确"])
             conds.append(row["条件"])
             if not row["反应键"]:
-                break                                  # 窗口结束（没作答）
-            if CFG["ISI_BETWEEN"] > 0:
-                if (window - self.int_clock.getTime()) >= CFG["MIN_TRIAL_TIME"]:
-                    self.win.flip()                    # 空屏，避免连击被算到下一试次
-                    core.wait(CFG["ISI_BETWEEN"])
-
-        elapsed = self.int_clock.getTime()
+                break
+            # 离截止不足一次刷新时，由反馈直接替换当前刺激。
+            if logging.defaultClock.getTime() + frame_period >= deadline:
+                break
+            blank_on = float(self.win.flip())
+            next_on = blank_on + CFG["ISI_BETWEEN"]
+            # 为下一次刷新预留一帧。尾部留空仍使用同一个区段截止时刻。
+            if next_on + frame_period + CFG["MIN_TRIAL_TIME"] >= deadline:
+                break
+            self._wait_until(next_on)
+            if logging.defaultClock.getTime() + frame_period + CFG["MIN_TRIAL_TIME"] >= deadline:
+                break
 
         # 3) 计分（2.2）：表现区段 = 真实得分；随机区段 = 从 yoking 窗口抽
         practice = practice_yoke is not None
@@ -535,13 +566,15 @@ class StroopEfficacyExp:
             source = "抽取"
         if not practice:
             self.total_score += score
-        self._fb_interval(score, eff_type, practice=practice)
+        feedback_on, feedback_off = self._fb_interval(score, eff_type, deadline, practice=practice)
 
         n_cong = sum(1 for c in conds if c == "congruent")
         row = dict(
             被试=self.subj, 组别=self.group, 阶段=phase,
             区段=("" if idx is None else idx + 1),
-            窗口s=window, 实际用时s=round(elapsed, 3),
+            窗口s=window, 实际用时s=round(feedback_on - interval_start, 4),
+            注视翻屏时刻s=fixation_on, 区段开始时刻s=interval_start, 区段截止时刻s=deadline,
+            反馈翻屏时刻s=feedback_on, 反馈结束时刻s=feedback_off,
             试次数=n_done, 正确数=n_correct,
             正确率=(round(n_correct / float(n_done), 3) if n_done else ""),
             一致比例=(round(n_cong / float(n_done), 3) if n_done else ""),
@@ -551,6 +584,7 @@ class StroopEfficacyExp:
             累计得分=round(self.total_score, 2),
         )
         self.rows_intervals.append(row)
+        self.check_escape()
         return row
 
     # ------------------------------------------------------------------ 主观探针
@@ -623,8 +657,7 @@ class StroopEfficacyExp:
         self.win.flip()
         core.wait(self.rng.uniform(0.4, 0.7))
 
-        self.kb_clock.reset()
-        event.clearEvents()
+        self._clear_response_buffer()
         if word:
             self.word.text = word
             self.word.color = CFG["COLOR_RGB"][ink]
@@ -632,13 +665,10 @@ class StroopEfficacyExp:
         else:
             self.square.fillColor = CFG["COLOR_RGB"][ink]
             self.square.draw()
-        self.win.flip()
-        k = event.waitKeys(maxWait=timeout, keyList=self.keys + ["escape"],
-                           timeStamped=self.kb_clock)
-        if k and k[0][0] == "escape":
-            self.abort()
-        resp_key = k[0][0] if k else ""
-        rt = float(k[0][1]) if k else None
+        onset = float(self.win.flip())
+        deadline = onset + timeout
+        resp_key, pressed_at = self._wait_for_response(onset, deadline)
+        rt = None if pressed_at is None else pressed_at - onset
         ok = int(resp_key == CFG["KEYS"][ink])
 
         if with_fb:
@@ -659,6 +689,8 @@ class StroopEfficacyExp:
         self.rows_trials.append(dict(
             被试=self.subj, 组别=self.group, 阶段=phase,
             区段="", 区段内序号="", 窗口s=timeout, 区段内开始时刻s="",
+            目标翻屏时刻s=onset, 作答截止时刻s=deadline,
+            按键时刻s=("" if pressed_at is None else pressed_at),
             条件=("mapping" if not word else ("congruent" if word == CFG["WORD"][ink]
                                              else "incongruent")),
             词=word or "色块", 墨色=ink,
