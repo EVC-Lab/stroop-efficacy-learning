@@ -9,6 +9,7 @@ import random
 import re
 import statistics
 from datetime import datetime
+from math import isfinite
 from pathlib import Path
 
 from psychopy import visual, core, event, gui
@@ -212,6 +213,8 @@ class StroopEfficacyExp:
     # ------------------------------------------------------------------ 区段反馈
     def _fb_interval(self, score, eff_type, deadline, practice=False):
         """区段反馈（2.2）：本次得多少分 + 分数是否取决于表现，共 1500ms。"""
+        if deadline is None or not isfinite(deadline):
+            raise ValueError("区段反馈需要有限的作答截止时刻。")
         if score > 0:
             self.fb_score.text = "+%d 分" % int(round(score))
             self.fb_score.setColor((0.5, 1.0, 0.5))
@@ -348,6 +351,7 @@ class StroopEfficacyExp:
         if interval_start is not None:
             window_end = deadline if escape_at is None else min(deadline, escape_at)
             elapsed = round(max(0.0, window_end - interval_start), 6)
+        # 正确率排除中断试次。一致比例按所有已呈现试次统计。
         n_evaluable = n_done - int(interrupted_trial)
         row = dict(
             被试=self.subj, 组别=self.group, 阶段=phase,

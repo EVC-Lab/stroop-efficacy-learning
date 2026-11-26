@@ -122,6 +122,18 @@ def check_deadline_poll():
         assert timed_input.wait_for_response(response_keys, 2.0, 3.0) == ("d", 2.006, 2.007)
 
 
+def check_feedback_deadline():
+    """Invalid deadlines raise before any feedback is drawn."""
+    exp = task.StroopEfficacyExp.__new__(task.StroopEfficacyExp)
+    for deadline in (None, math.nan, math.inf, -math.inf):
+        try:
+            exp._fb_interval(0.0, "performance", deadline)
+        except ValueError as exc:
+            assert "截止时刻" in str(exc)
+        else:
+            raise AssertionError(f"Feedback accepted an invalid deadline: {deadline!r}")
+
+
 def check_refresh_rate():
     assert task.resolve_frame_timing(60.0, None) == (60.0, 1 / 60)
     assert task.resolve_frame_timing(360.0, None) == (360.0, 1 / 360)
@@ -212,6 +224,9 @@ def check_interval_interruptions(exp):
         with TemporaryDirectory() as directory:
             exp.outdir = directory
             with (patch.object(exp.fb_source, "draw", feedback_draw),
+                  patch.object(exp, "make_trial_content", side_effect=[
+                      ("red", "红", "congruent"), ("red", "绿", "incongruent"),
+                  ]),
                   patch.object(exp, "_present_target", present_with_response),
                   patch.object(exp.win, "flip", flip),
                   patch.object(exp.win, "close") as close,
@@ -251,6 +266,8 @@ def check_interval_interruptions(exp):
                 assert row["正确数"] == 1 and row["正确率"] == 1
                 assert row["作答窗用时s"] > 0
             if stage == "作答中":
+                assert float(saved["一致比例"]) == 0.5
+                assert float(saved["正确率"]) == 1.0
                 assert trials[-1]["试次中断"] == "1"
                 assert trials[-1]["正确"] == trials[-1]["按键时刻s"] == ""
             if stage == "反馈中":
@@ -527,6 +544,7 @@ def main():
         parser.error("--isi must be a finite, non-negative duration")
     check_virtual_flips()
     check_deadline_poll()
+    check_feedback_deadline()
     check_refresh_rate()
 
     settings = {"FULLSCR": args.fullscreen, "FIX_CHOICES": (0.08,), "ISI_BETWEEN": args.isi}
