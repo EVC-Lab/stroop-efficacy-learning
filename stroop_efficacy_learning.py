@@ -1,39 +1,7 @@
 # -*- coding: utf-8 -*-
-"""
-实验2复现：图片—词干扰 + 自由反应区间 + 随时间漂移的“效能”
-================================================================================
-对应《实验内容》2.1–2.3：
+"""色词 Stroop 行为任务，结合研究一的刺激与研究二的区段流程。
 
-    288 个区段（interval）。每个区段给一个固定作答窗口（随机 2000 / 3000 / 4000 ms），
-    被试在窗口内**自主决定做多少个试次**（自由反应，没有单试次时限）——这是实验2
-    相对实验1的核心改动，目的是让 DDM 能同时估计漂移率与阈限。
-
-    单区段流程（2.2）：
-        注视点 1000 / 1500 / 2000 ms
-            → 自由作答窗口（窗口内可连续做任意多个试次）
-            → 反馈 1500 ms：本次得多少分 + 分数是否取决于表现
-
-    任务：4 张灰度水果图（苹果 / 梨 / 柠檬 / 桃）上叠加水果词，
-          判断**图片是什么水果**、忽略文字；D F J K 对应四种水果。
-          一致 = 词与图相同；不一致 = 词是另一种水果。
-
-    计分：每答对一次 +10 分（连续计分，不是实验1的二元 $0.50 / $0.00）。
-          随机区段的分数从“过去 10 个看表现区段的得分窗口”里抽一条（yoking），
-          使两类区段的得分分布匹配。
-
-运行方式（重要）：必须用 **PsychoPy 自带的 Python**，不要用系统 python。
-    方式A：PsychoPy → Coder 视图 → File/Open 本文件 → 点绿色 Run 三角
-    方式B："C:\\Program Files\\PsychoPy\\python.exe" exp2_fruit_effort.py
-
-    想快速试跑：把下面 DEBUG_FAST 改成 True（12 个区段、窗口 1s、不全屏）。
-
-数据输出：
-    ./data/<编号>_<姓名>_<时间>/trials.csv     每个试次一行（含区段号）
-    ./data/<编号>_<姓名>_<时间>/intervals.csv  每个区段一行（效能概率/类型/窗口/得分）
-    ./data/<编号>_<姓名>_<时间>/probes.csv     每次主观探针一行
-    ./data/<编号>_<姓名>_<时间>/meta.json      组别、总分、种子等
-    ./stimuli/fruit_*.png                      水果刺激图，首次运行自动生成
-================================================================================
+用 PsychoPy Studio 的 Coder 运行本文件。流程及快跑设置见 README。
 """
 
 import os
@@ -54,11 +22,6 @@ except AttributeError:  # 极新版本若移除，再退回 hardware.mouse
     from psychopy.hardware import mouse as mouse_mod
     MouseClass = mouse_mod.Mouse
 
-try:  # 水果刺激图用 Pillow 现场绘制（PsychoPy 自带）
-    from PIL import Image, ImageDraw, ImageFilter, ImageChops
-    HAS_PIL = True
-except ImportError:
-    HAS_PIL = False
 
 
 def mouse_left_pressed(mouse):
@@ -101,21 +64,19 @@ CFG = {
     "BG_COLOR": rgb255(0, 0, 0),     # 纯黑背景
     "FONT": "Microsoft YaHei",       # 中文必须用中文字体（macOS 改 'PingFang SC'）
     "DEBUG_FAST": False,             # True = 缩短时长/区段数，仅用于跑通流程
-    "SKIP_PRACTICE": False,          # True = 跳过练习，直接跑 288 区段（演示/补数据用）
+    "SKIP_PRACTICE": False,          # True = 跳过练习，仅供调试
 
-    # ---------- 刺激材料与按键（2.2）----------
-    # 四键从左到右：D 苹果 / F 梨 / J 柠檬 / K 桃
-    "FRUITS": ["apple", "pear", "lemon", "peach"],
-    "FRUIT_CN": {"apple": "苹果", "pear": "梨", "lemon": "柠檬", "peach": "桃"},
-    "KEYS": {"apple": "d", "pear": "f", "lemon": "j", "peach": "k"},
-    "PIC_SIZE": 0.50,            # 图片边长 = 屏高的 50%
-    "WORD_HEIGHT": 0.080,        # 叠加的水果词字号
-    "WORD_COLOR": (1, 1, 1),
-    # 水果图配色（0–255）：深灰实心 + 浅灰描边，纯黑底上清楚，白字压在上面也够对比
-    "FRUIT_FILL_GRAY": 78,
-    "FRUIT_LINE_GRAY": 158,
-    "FRUIT_LINE_W": 0.010,       # 描边宽度（占画布边长比例）
-    "COND_RATIO": 0.50,          # 一致试次比例，其余为不一致
+    # ---------- 刺激材料与按键（沿用研究一的色词与映射）----------
+    "KEYS": {"red": "d", "green": "f", "blue": "j", "yellow": "k"},
+    "COLOR_RGB": {
+        "red": (1.0, -1.0, -1.0),
+        "green": (-1.0, 1.0, -1.0),
+        "blue": (-1.0, -1.0, 1.0),
+        "yellow": (1.0, 1.0, -1.0),
+    },
+    "WORD": {"red": "红", "green": "绿", "blue": "蓝", "yellow": "黄"},
+    "WORD_HEIGHT": 0.11,
+    "COND_RATIO": 0.50,          # 每题独立抽取一致或不一致
 
     # ---------- 时间参数（秒，2.2）----------
     "FIX_CHOICES": (1.0, 1.5, 2.0),        # 注视点随机 1000/1500/2000ms
@@ -140,18 +101,14 @@ CFG = {
     # 初始窗口：8 个常规分 + 2 个低分，均值与预试的典型区段得分接近
     "YOKE_INIT_SCORES": [30.0] * 8 + [10.0] * 2,
     "SHOW_TOTAL_SCORE": True,    # 反馈里是否显示“累计 xxx 分”
-    "SHOW_EFF_LABEL": True,      # 反馈图标下是否加一行文字说明（关掉就只靠图标）
-    # 效能反馈的“按键图标”：留空用矢量键帽；填透明底 PNG 路径则直接显示图片
-    "BTN_ICON_IMG": "",
-    "BTN_LABEL": "按 键",        # 键帽上的字，改成 "" 就是一块空白键帽
 
     # ---------- 主观探针（2.2）----------
     "PROBE_EVERY": (2, 4),       # 每 2–4 个区段插一次
     "SHOW_VAS_NUMBER": False,    # 量表上是否显示 0–100 数字（原文不显示）
 
     # ---------- 练习（原文未细写，按实验1的结构压缩）----------
-    "N_PRAC1": 8,                # 水果—按键映射
-    "N_PRAC2": 12,               # 图片—词干扰
+    "N_PRAC1": 8,                # 色块—按键映射
+    "N_PRAC2": 12,               # 色词干扰
     "N_PRAC3": 4,                # 自由作答窗口（体验“窗口结束才结算”）
     "PRAC_TIMEOUT": 2.0,         # 练习单试次的作答上限
     "PRAC_WINDOW": 2.0,          # 练习区段的窗口长度
@@ -220,7 +177,7 @@ class YokeWindow(object):
     """连续分数的 yoking 窗口（2.2）。
 
     窗口里存最近 10 个“看表现”区段的**得分**（不再是 0/1 的奖赏有无）。
-    随机区段的分数直接从这个窗口里抽一条，于是两类区段的得分分布被强制匹配。
+    随机区段从这个窗口抽取分数，用于匹配两类区段的得分分布。
     每来一个“看表现”区段，它的得分入窗、最旧的一条出窗。
     """
 
@@ -258,116 +215,9 @@ def make_score_schedule(n_intervals, rng):
 
 
 # ==============================================================================
-#  三、水果刺激图（用 Pillow 现场绘制，无需外部素材）
+#  三、实验主流程
 # ==============================================================================
-# 每个水果都用若干“同色填充”的椭圆/线段叠成。叠出来的蒙版是二值的，内部边界
-# 不会留下任何线，所以剪影是平滑的；形状差异靠圆/椭圆的比例和位置来区分。
-_FRUIT_SHAPES = {
-    # 苹果：一个大椭圆做身体，上面压两个圆形肩膀 → 顶部自然形成一个凹口（果蒂窝）
-    "apple": dict(
-        body=[(0.175, 0.300, 0.825, 0.880)],
-        extra=[],
-        erase=[(0.430, 0.252, 0.570, 0.338)],
-        stem=((0.500, 0.300), (0.516, 0.200)),
-        leaf=(0.518, 0.198, 0.668, 0.262),
-    ),
-    # 梨：下大椭圆 + 上部细颈椭圆 + 中间过渡椭圆，合成上窄下宽的梨形
-    "pear": dict(
-        body=[(0.255, 0.500, 0.745, 0.885), (0.335, 0.400, 0.665, 0.720),
-              (0.405, 0.265, 0.595, 0.630)],
-        extra=[],
-        stem=((0.500, 0.290), (0.500, 0.190)),
-        leaf=None,
-    ),
-    # 柠檬：扁椭圆 + 左右两个小鼓包，形成两端凸起的柠檬轮廓
-    "lemon": dict(
-        body=[(0.190, 0.375, 0.810, 0.665)],
-        extra=[(0.150, 0.498, 0.225, 0.545), (0.775, 0.498, 0.850, 0.545)],
-        stem=None,
-        leaf=None,
-    ),
-    # 桃：近圆的椭圆 + 顶部小鼓包 + 叶子，中缝在成品图上另画
-    "peach": dict(
-        body=[(0.225, 0.330, 0.775, 0.875)],
-        extra=[(0.455, 0.295, 0.545, 0.405)],
-        stem=None,
-        leaf=(0.545, 0.345, 0.720, 0.415),
-    ),
-}
-
-
-def _fruit_mask(name, S):
-    """在 S×S 灰度蒙版上画出水果剪影（255 = 实体，0 = 透明）。"""
-    m = Image.new("L", (S, S), 0)
-    d = ImageDraw.Draw(m)
-    shp = _FRUIT_SHAPES[name]
-
-    for box in shp["body"] + shp["extra"]:
-        d.ellipse([x * S for x in box], fill=255)
-    for box in shp.get("erase", []):      # 从顶部切一个浅弧口当果蒂窝（不封闭成洞）
-        d.ellipse([x * S for x in box], fill=0)
-    if shp["stem"]:
-        (x0, y0), (x1, y1) = shp["stem"]
-        d.line([(x0 * S, y0 * S), (x1 * S, y1 * S)], fill=255, width=max(2, int(0.022 * S)))
-    if shp["leaf"]:
-        d.ellipse([x * S for x in shp["leaf"]], fill=255)
-    return m
-
-
-def _peach_cleft(draw, S):
-    """桃子的中缝：一条略弯的竖线，画在成品图上（不属于剪影）。"""
-    color = (CFG["FRUIT_LINE_GRAY"],) * 3 + (255,)
-    pts = []
-    for k in range(21):
-        t = k / 20.0
-        y = 0.395 + t * 0.415
-        x = 0.500 + 0.018 * math.sin(math.pi * t)
-        pts.append((x * S, y * S))
-    draw.line(pts, fill=color, width=max(2, int(S * 0.008)), joint="curve")
-
-
-def make_fruit_image(name, size=512, supersample=2):
-    """生成一张透明底灰度水果 PNG（RGBA）。"""
-    S = size * supersample
-    mask = _fruit_mask(name, S).resize((size, size), Image.LANCZOS)
-
-    lw = max(3, int(size * CFG["FRUIT_LINE_W"]))
-    inner = mask.filter(ImageFilter.MinFilter(lw * 2 + 1))      # 腐蚀
-    ring = ImageChops.subtract(mask, inner)                     # 剩下的一圈 = 描边
-
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    fill_layer = Image.new("RGBA", (size, size),
-                           (CFG["FRUIT_FILL_GRAY"],) * 3 + (255,))
-    line_layer = Image.new("RGBA", (size, size),
-                           (CFG["FRUIT_LINE_GRAY"],) * 3 + (255,))
-    img.paste(fill_layer, (0, 0), mask)
-    img.paste(line_layer, (0, 0), ring)
-    if name == "peach":
-        _peach_cleft(ImageDraw.Draw(img), size)
-    return img
-
-
-def ensure_fruit_images(folder):
-    """确保 stimuli/ 下有 4 张水果图，返回 {水果: 路径}。已存在则直接复用。"""
-    os.makedirs(folder, exist_ok=True)
-    paths = {}
-    for name in CFG["FRUITS"]:
-        path = os.path.join(folder, "fruit_%s.png" % name)
-        if not (os.path.isfile(path) and os.path.getsize(path) > 0):
-            if not HAS_PIL:
-                raise RuntimeError(
-                    "缺少水果刺激图，且当前环境没有 Pillow。请用 PsychoPy 自带的 python "
-                    "运行一次本脚本（会自动生成 stimuli/ 下的图片），或手动把 4 张图片"
-                    "放进 stimuli/ 并命名为 fruit_apple.png 等。")
-            make_fruit_image(name).save(path)
-        paths[name] = path
-    return paths
-
-
-# ==============================================================================
-#  四、实验主类
-# ==============================================================================
-class FruitEffortExp(object):
+class StroopEfficacyExp:
     def __init__(self, info):
         self.outdir = None
         self.update_info(info)
@@ -383,29 +233,19 @@ class FruitEffortExp(object):
         )
         self.win.setMouseVisible(False)
 
-        base = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd()
-        self.img_paths = ensure_fruit_images(os.path.join(base, "stimuli"))
-
         f = CFG["FONT"]
-        # ---- 基础刺激 ----
         self.fix = visual.TextStim(self.win, "+", font=f, color=(1, 1, 1), height=0.09)
-        # 4 张图各建一个 ImageStim 预先载入纹理，试次里只切换对象、不反复读盘
-        self.pic_stims = dict(
-            (n, visual.ImageStim(self.win, image=pth,
-                                 size=(CFG["PIC_SIZE"], CFG["PIC_SIZE"])))
-            for n, pth in self.img_paths.items())
-        self.pic = self.pic_stims[CFG["FRUITS"][0]]
-        self.word = visual.TextStim(self.win, "", font=f, color=CFG["WORD_COLOR"],
+        self.word = visual.TextStim(self.win, "", font=f, color=(1, 1, 1),
                                     height=CFG["WORD_HEIGHT"], bold=True)
+        self.square = visual.Rect(self.win, width=0.16, height=0.16, lineColor=None)
 
         # ---- 区段反馈 ----
         self.fb_score = visual.TextStim(self.win, "", font=f, color=(1, 1, 1),
                                         height=0.095, pos=(0, 0.115))
         self.fb_total = visual.TextStim(self.win, "", font=f, color=(0.75, 0.75, 0.75),
                                         height=0.034, pos=(0, 0.275))
-        self.fb_icon_lab = visual.TextStim(self.win, "", font=f, color=(0.85, 0.85, 0.85),
-                                           height=0.034, pos=(0, -0.228))
-        self._build_icons()
+        self.fb_source = visual.TextStim(self.win, "", font=f, color=(0.85, 0.85, 0.85),
+                                         height=0.040, pos=(0, -0.075))
 
         # ---- 练习用的正误反馈 ----
         self.fb_acc = visual.TextStim(self.win, "", font=f, color=(1, 1, 1), height=0.075)
@@ -512,7 +352,7 @@ class FruitEffortExp(object):
             yoking窗口均值=round(self.yoke.mean(), 2),
             轨迹种子=self.traj_seed, 效能下限=CFG["P_MIN"], 效能上限=CFG["P_MAX"],
             每对一次得分=CFG["POINT_PER_CORRECT"], 窗口长度选项=list(CFG["WINDOW_CHOICES"]),
-            版本="exp2_v1.0",
+            版本="stroop-efficacy-dev",
         )
         with open(os.path.join(self.outdir, "meta.json"), "w", encoding="utf-8") as fh:
             json.dump(meta, fh, ensure_ascii=False, indent=2)
@@ -542,53 +382,6 @@ class FruitEffortExp(object):
         if "escape" in event.getKeys(keyList=["escape"]):
             self.abort()
 
-    # ------------------------------------------------------------------ 图标
-    def _build_icons(self):
-        """效能反馈用的两个图标（位置比实验1更低、更小，因为要和得分同屏）。
-
-        按键 = 三层叠出的实体键帽（深侧壁 + 浅顶面 + 标签）；骰子 = 方格 + 三点。
-        想换成自己的图：把 CFG["BTN_ICON_IMG"] 指向透明底 PNG。
-        """
-        f = CFG["FONT"]
-        cy = -0.075
-        img = CFG.get("BTN_ICON_IMG", "")
-        self.btn_img = None
-        if img and os.path.isfile(img):
-            self.btn_img = visual.ImageStim(self.win, image=img, size=(0.115, 0.115), pos=(0, cy))
-        else:
-            self.btn_base = visual.Rect(self.win, width=0.178, height=0.066,
-                                        fillColor=(0.30, 0.30, 0.30), lineColor=None,
-                                        pos=(0, cy - 0.009))
-            self.btn_face = visual.Rect(self.win, width=0.170, height=0.050,
-                                        fillColor=(0.90, 0.90, 0.90),
-                                        lineColor=(0.62, 0.62, 0.62), lineWidth=1,
-                                        pos=(0, cy + 0.003))
-            self.btn_txt = visual.TextStim(self.win, CFG["BTN_LABEL"], font=f,
-                                           color=(-0.85, -0.85, -0.85), bold=True,
-                                           height=0.026, pos=(0, cy + 0.001))
-        self.dice_rect = visual.Rect(self.win, width=0.100, height=0.100,
-                                     fillColor=(0.92, 0.92, 0.92), lineColor=(-1, -1, -1),
-                                     lineWidth=2, pos=(0, cy))
-        self.dice_dots = [
-            visual.Circle(self.win, radius=0.008, fillColor=(-1, -1, -1), lineColor=None,
-                          pos=(0 + dx, cy + dy))
-            for dx, dy in ((-0.023, 0.023), (0.0, 0.0), (0.023, -0.023))
-        ]
-
-    def _draw_button_icon(self):
-        if self.btn_img is not None:
-            self.btn_img.draw()
-            return
-        self.btn_base.draw()
-        self.btn_face.draw()
-        if CFG["BTN_LABEL"]:
-            self.btn_txt.draw()
-
-    def _draw_dice(self):
-        self.dice_rect.draw()
-        for d in self.dice_dots:
-            d.draw()
-
     # ------------------------------------------------------------------ 区段反馈
     def _fb_interval(self, score, eff_type, practice=False):
         """区段反馈（2.2）：本次得多少分 + 分数是否取决于表现，共 1500ms。"""
@@ -600,14 +393,13 @@ class FruitEffortExp(object):
             self.fb_score.setColor((0.8, 0.8, 0.8))
         self.fb_score.draw()
 
-        if eff_type == "performance":
-            self._draw_button_icon()
-            self.fb_icon_lab.text = "本次得分取决于你的表现"
+        if practice:
+            self.fb_source.text = "练习得分：每答对一题得 %d 分" % CFG["POINT_PER_CORRECT"]
+        elif eff_type == "performance":
+            self.fb_source.text = "本段得分取决于你的表现"
         else:
-            self._draw_dice()
-            self.fb_icon_lab.text = "本次得分是随机决定的"
-        if CFG["SHOW_EFF_LABEL"]:
-            self.fb_icon_lab.draw()
+            self.fb_source.text = "本段得分由随机抽取得到"
+        self.fb_source.draw()
 
         if CFG["SHOW_TOTAL_SCORE"] and not practice:
             self.fb_total.text = "累计 %d 分" % int(round(self.total_score))
@@ -619,28 +411,23 @@ class FruitEffortExp(object):
 
     # ------------------------------------------------------------------ 单试次
     def make_trial_content(self):
-        """抽一个试次的内容：图片 + 叠加词 + 一致性条件。"""
-        pic = self.rng.choice(CFG["FRUITS"])
+        """抽取字色、色词和一致性条件。"""
+        ink = self.rng.choice(list(CFG["KEYS"]))
         if self.rng.random() < CFG["COND_RATIO"]:
-            cond, word = "congruent", CFG["FRUIT_CN"][pic]
-        else:
-            others = [x for x in CFG["FRUITS"] if x != pic]
-            cond, word = "incongruent", CFG["FRUIT_CN"][self.rng.choice(others)]
-        return pic, word, cond
+            return ink, CFG["WORD"][ink], "congruent"
+        other_colors = [color for color in CFG["KEYS"] if color != ink]
+        word_color = self.rng.choice(other_colors)
+        return ink, CFG["WORD"][word_color], "incongruent"
 
     def run_free_trial(self, sub_idx, t_end, phase, interval_idx, window):
-        """自由反应区段里的一个试次：图+词一直呈现到按键或窗口结束。
-
-        没有单试次时限——这是实验2与实验1最大的区别；超时只发生在整个窗口结束时。
-        """
-        pic, word, cond = self.make_trial_content()
-        self.pic = self.pic_stims[pic]
+        """呈现一道色词题，接受作答直到区段结束。"""
+        ink, word, cond = self.make_trial_content()
         self.word.text = word
+        self.word.color = CFG["COLOR_RGB"][ink]
 
         started = self.int_clock.getTime()
         self.kb_clock.reset()
         event.clearEvents()
-        self.pic.draw()
         self.word.draw()
         self.win.flip()
 
@@ -652,13 +439,13 @@ class FruitEffortExp(object):
         resp_key = k[0][0] if k else ""
         rt = float(k[0][1]) if k else None
 
-        correct_key = CFG["KEYS"][pic]
+        correct_key = CFG["KEYS"][ink]
         row = dict(
             被试=self.subj, 组别=self.group, 阶段=phase,
             区段=("" if interval_idx is None else interval_idx + 1),
             区段内序号=sub_idx, 窗口s=window,
             区段内开始时刻s=round(started, 3),
-            条件=cond, 图片=CFG["FRUIT_CN"][pic], 图片代号=pic, 词=word,
+            条件=cond, 词=word, 墨色=ink,
             正确键=correct_key, 反应键=resp_key, 正确=int(resp_key == correct_key),
             反应时=("" if rt is None else round(rt, 4)),
             过快=int(rt is not None and rt < 0.25),   # DDM 分析按原文剔除 RT<250ms
@@ -789,20 +576,22 @@ class FruitEffortExp(object):
         ))
 
     # ------------------------------------------------------------------ 练习
-    def _practice_trial(self, pic, word, timeout=None, with_fb=True, phase="prac"):
-        """练习用的单试次：注视点 → 图(+词) → 正误反馈。"""
+    def _practice_trial(self, ink, word, timeout=None, with_fb=True, phase="prac"):
+        """练习用的单试次：注视点 → 色块或色词 → 正误反馈。"""
         timeout = CFG["PRAC_TIMEOUT"] if timeout is None else timeout
         self.fix.draw()
         self.win.flip()
         core.wait(self.rng.uniform(0.4, 0.7))
 
-        self.pic = self.pic_stims[pic]
-        self.word.text = word
         self.kb_clock.reset()
         event.clearEvents()
-        self.pic.draw()
         if word:
+            self.word.text = word
+            self.word.color = CFG["COLOR_RGB"][ink]
             self.word.draw()
+        else:
+            self.square.fillColor = CFG["COLOR_RGB"][ink]
+            self.square.draw()
         self.win.flip()
         k = event.waitKeys(maxWait=timeout, keyList=self.keys + ["escape"],
                            timeStamped=self.kb_clock)
@@ -810,7 +599,7 @@ class FruitEffortExp(object):
             self.abort()
         resp_key = k[0][0] if k else ""
         rt = float(k[0][1]) if k else None
-        ok = int(resp_key == CFG["KEYS"][pic])
+        ok = int(resp_key == CFG["KEYS"][ink])
 
         if with_fb:
             if not resp_key:
@@ -830,10 +619,10 @@ class FruitEffortExp(object):
         self.rows_trials.append(dict(
             被试=self.subj, 组别=self.group, 阶段=phase,
             区段="", 区段内序号="", 窗口s=timeout, 区段内开始时刻s="",
-            条件=("mapping" if not word else ("congruent" if word == CFG["FRUIT_CN"][pic]
-                                            else "incongruent")),
-            图片=CFG["FRUIT_CN"][pic], 图片代号=pic, 词=word,
-            正确键=CFG["KEYS"][pic], 反应键=resp_key, 正确=ok,
+            条件=("mapping" if not word else ("congruent" if word == CFG["WORD"][ink]
+                                             else "incongruent")),
+            词=word or "色块", 墨色=ink,
+            正确键=CFG["KEYS"][ink], 反应键=resp_key, 正确=ok,
             反应时=("" if rt is None else round(rt, 4)),
             过快=int(rt is not None and rt < 0.25),
         ))
@@ -841,43 +630,36 @@ class FruitEffortExp(object):
 
     def practice_mapping(self):
         self.wait_space(
-            "练习 1 / 3：水果—按键\n\n"
-            "屏幕中央会出现一种水果的图片，请判断它是哪种水果，并按下对应按键：\n\n"
-            "        苹果 → D      梨 → F      柠檬 → J      桃 → K\n\n"
-            "（左手食指/中指按 D/F，右手食指/中指按 J/K）\n\n"
-            "按 空格 开始。", height=0.038)
+            "练习 1 / 3：颜色与按键\n\n"
+            "屏幕中央会出现一个色块，请判断它的颜色并按下对应按键。\n\n"
+            "红色 → D    绿色 → F    蓝色 → J    黄色 → K\n\n"
+            "按空格开始。", height=0.038)
         seq = []
         while len(seq) < CFG["N_PRAC1"]:
-            seq += list(CFG["FRUITS"])
+            seq += list(CFG["KEYS"])
         seq = seq[:CFG["N_PRAC1"]]
         self.rng.shuffle(seq)
-        for pic in seq:
-            self._practice_trial(pic, "", phase="prac1")
+        for ink in seq:
+            self._practice_trial(ink, "", phase="prac1")
 
-    def practice_picture_word(self):
+    def practice_color_word(self):
         self.wait_space(
-            "练习 2 / 3：图片上会叠一个词\n\n"
-            "接下来水果图片中央会叠印一个水果词。\n"
-            "注意：请判断【图片】是哪种水果，**忽略文字**。\n\n"
-            "例如：画的是苹果、上面写着“梨” → 按 D（苹果）\n\n"
-            "按 空格 开始。", height=0.038)
+            "练习 2 / 3：判断字色\n\n"
+            "屏幕中央会出现一个表示颜色的字。请按字的颜色选键，忽略字义。\n\n"
+            "例如，用绿色写的“红”应该按 F。\n\n"
+            "按空格开始。", height=0.038)
         for _ in range(CFG["N_PRAC2"]):
-            pic, word, _cond = self.make_trial_content()
-            self._practice_trial(pic, word, phase="prac2")
+            ink, word, _ = self.make_trial_content()
+            self._practice_trial(ink, word, phase="prac2")
 
     def practice_free_window(self):
         self.wait_space(
-            "练习 3 / 3：自由作答窗口\n\n"
-            "这一部分和实验1不一样：每一“段”会给你一个固定的作答时间窗（比如 3 秒），\n"
-            "窗口里你能做几道题就做几道，想做多少由你自己决定——没有单题时限。\n\n"
-            "窗口一结束会立刻结算：显示这一段得了多少分，以及这次的分数\n"
-            "是“取决于你的表现”还是“随机决定”。\n\n"
-            "提示：越早按、做得越多，分数越高；但按错不得分，所以也别乱按。\n\n"
-            "按 空格 开始。", height=0.036)
-        for i in range(CFG["N_PRAC3"]):
-            eff = "performance" if i % 2 == 0 else "random"
-            self.run_interval(None, CFG["PRAC_WINDOW"], eff_type=eff,
-                              p_eff=None, practice=True, phase="prac3")
+            "练习 3 / 3：在一个区段内连续作答\n\n"
+            "每段给你一段固定的作答时间。每答完一题，就可以继续做下一题。\n"
+            "时间结束后统一结算。本练习每答对一题得 %d 分。\n\n"
+            "按空格开始。" % CFG["POINT_PER_CORRECT"], height=0.036)
+        for _ in range(CFG["N_PRAC3"]):
+            self.run_interval(None, CFG["PRAC_WINDOW"], practice=True, phase="prac3")
 
     # ------------------------------------------------------------------ 休息
     def show_break(self, done, total):
@@ -888,19 +670,14 @@ class FruitEffortExp(object):
 
     # ------------------------------------------------------------------ 正式任务
     def run_main(self):
-        if CFG.get("SKIP_PRACTICE", False):
-            rules = ("任务：屏幕会先出现一个十字，然后出现水果图片（中央叠印一个水果词），\n"
-                     "请判断【图片】是哪种水果、忽略文字，按 D F J K。\n"
-                     "        苹果 → D    梨 → F    柠檬 → J    桃 → K\n\n")
-        else:
-            rules = "规则与刚才相同：判断图片是什么水果、忽略文字，按 D F J K。\n\n"
         self.wait_space(
-            "正式任务开始\n\n" + rules +
-            "每段会给你一个作答窗口，窗口内能做几道做几道，窗口结束才结算分数。\n"
-            "按对一题 +10 分。\n\n"
-            "任务中会不时弹出滑块问题，请根据你**当下**的感受作答。\n\n"
-            "共 %d 个区段，约 35–40 分钟，中途可以休息。\n按 空格 开始。"
-            % CFG["N_INTERVALS"], height=0.036)
+            "正式任务开始\n\n"
+            "请按字的颜色选键，忽略字义。红 → D，绿 → F，蓝 → J，黄 → K。\n"
+            "请在每段给定的时间内连续作答，区段结束时会显示得分和来源。\n\n"
+            "有的区段按表现计分，每答对一题得 %d 分；有的区段由系统随机给分。\n"
+            "作答时请兼顾速度和准确性。任务中会偶尔出现滑块问题，请按当下的判断作答。\n\n"
+            "共 %d 个区段。按空格开始。"
+            % (CFG["POINT_PER_CORRECT"], CFG["N_INTERVALS"]), height=0.036)
 
         n = CFG["N_INTERVALS"]
         p_traj = make_trajectory(n, CFG["P_MIN"], CFG["P_MAX"], self.traj_seed,
@@ -929,7 +706,7 @@ class FruitEffortExp(object):
             self.update_info(ask_info(prev=self.info))
         if not CFG.get("SKIP_PRACTICE", False):
             self.practice_mapping()
-            self.practice_picture_word()
+            self.practice_color_word()
             self.practice_free_window()
         self.run_main()
         self.save(verbose=True)
@@ -938,7 +715,7 @@ class FruitEffortExp(object):
 
 
 # ==============================================================================
-#  五、入口
+#  四、入口
 # ==============================================================================
 def auto_subject_id():
     """编号留空时自动生成，例如 S11211930。"""
@@ -960,7 +737,7 @@ def ask_info(prev=None):
             "性别": prev.get("性别", "女"),
             "漂移方向": ["自动（按编号奇偶）", "正向", "反向"],
         },
-        title="实验2：图片—词 + 自由反应 + 漂移效能 —— 请填写被试信息",
+        title="色词 Stroop 行为任务 · 被试信息",
         order=["姓名", "被试编号", "年龄", "性别", "漂移方向"],
     )
     if not dlg.OK:
@@ -974,7 +751,7 @@ def ask_info(prev=None):
 
 if __name__ == "__main__":
     info = ask_info()
-    exp = FruitEffortExp(info)
+    exp = StroopEfficacyExp(info)
     try:
         exp.run()
     except SystemExit:
