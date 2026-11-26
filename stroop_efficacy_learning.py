@@ -490,35 +490,17 @@ class StroopEfficacyExp:
         word_color = self.rng.choice(other_colors)
         return ink, CFG["WORD"][word_color], "incongruent"
 
-    def run_free_trial(self, sub_idx, interval_start, phase, interval_idx, window):
-        """呈现一道色词题，接受作答直到区段结束。"""
-        ink, word, cond = self.make_trial_content()
-        self.word.text = word
-        self.word.color = CFG["COLOR_RGB"][ink]
-
+    def _present_target(self, ink, word):
+        """呈现色块或色词，返回实际翻屏的时刻。"""
         self._clear_response_buffer()
-        self.word.draw()
-        onset = float(self.win.flip())
-        start = onset if interval_start is None else interval_start
-        deadline = start + window
-        resp_key, pressed_at = self._wait_for_response(onset, deadline)
-        rt = None if pressed_at is None else pressed_at - onset
-
-        correct_key = CFG["KEYS"][ink]
-        row = dict(
-            被试=self.subj, 组别=self.group, 阶段=phase,
-            区段=("" if interval_idx is None else interval_idx + 1),
-            区段内序号=sub_idx, 窗口s=window,
-            区段内开始时刻s=round(onset - start, 4),
-            目标翻屏时刻s=onset, 作答截止时刻s=deadline,
-            按键时刻s=("" if pressed_at is None else pressed_at),
-            条件=cond, 词=word, 墨色=ink,
-            正确键=correct_key, 反应键=resp_key, 正确=int(resp_key == correct_key),
-            反应时=("" if rt is None else round(rt, 4)),
-            过快=int(rt is not None and rt < 0.25),   # DDM 分析按原文剔除 RT<250ms
-        )
-        self.rows_trials.append(row)
-        return row
+        if word:
+            self.word.text = word
+            self.word.color = CFG["COLOR_RGB"][ink]
+            self.word.draw()
+        else:
+            self.square.fillColor = CFG["COLOR_RGB"][ink]
+            self.square.draw()
+        return float(self.win.flip())
 
     # ------------------------------------------------------------------ 区段
     def run_interval(self, idx, window, eff_type, p_eff=None, phase="main", practice_yoke=None):
@@ -530,17 +512,35 @@ class StroopEfficacyExp:
         interval_start = None
         n_done = 0
         n_correct = 0
-        conds = []
+        n_congruent = 0
         frame_period = self.win.monitorFramePeriod
         while True:
-            row = self.run_free_trial(n_done + 1, interval_start, phase, idx, window)
+            ink, word, condition = self.make_trial_content()
+            onset = self._present_target(ink, word)
             if interval_start is None:
-                interval_start = row["目标翻屏时刻s"]
-            deadline = row["作答截止时刻s"]
+                interval_start = onset
+                deadline = interval_start + window
+            response, pressed_at = self._wait_for_response(onset, deadline)
+            rt = None if pressed_at is None else pressed_at - onset
+
+            correct_key = CFG["KEYS"][ink]
+            correct = int(response == correct_key)
             n_done += 1
-            n_correct += int(row["正确"])
-            conds.append(row["条件"])
-            if not row["反应键"]:
+            n_correct += correct
+            n_congruent += int(condition == "congruent")
+            self.rows_trials.append(dict(
+                被试=self.subj, 组别=self.group, 阶段=phase,
+                区段=("" if idx is None else idx + 1),
+                区段内序号=n_done, 窗口s=window,
+                区段内开始时刻s=round(onset - interval_start, 4),
+                目标翻屏时刻s=onset, 作答截止时刻s=deadline,
+                按键时刻s=("" if pressed_at is None else pressed_at),
+                条件=condition, 词=word, 墨色=ink,
+                正确键=correct_key, 反应键=response, 正确=correct,
+                反应时=("" if rt is None else round(rt, 4)),
+                过快=int(rt is not None and rt < 0.25),  # DDM 分析的过快标记
+            ))
+            if not response:
                 break
             # 离截止不足一次刷新时，由反馈直接替换当前刺激。
             if logging.defaultClock.getTime() + frame_period >= deadline:
@@ -568,7 +568,6 @@ class StroopEfficacyExp:
             self.total_score += score
         feedback_on, feedback_off = self._fb_interval(score, eff_type, deadline, practice=practice)
 
-        n_cong = sum(1 for c in conds if c == "congruent")
         row = dict(
             被试=self.subj, 组别=self.group, 阶段=phase,
             区段=("" if idx is None else idx + 1),
@@ -577,7 +576,7 @@ class StroopEfficacyExp:
             反馈翻屏时刻s=feedback_on, 反馈结束时刻s=feedback_off,
             试次数=n_done, 正确数=n_correct,
             正确率=(round(n_correct / float(n_done), 3) if n_done else ""),
-            一致比例=(round(n_cong / float(n_done), 3) if n_done else ""),
+            一致比例=(round(n_congruent / float(n_done), 3) if n_done else ""),
             效能概率=("" if p_eff is None else round(float(p_eff), 4)),
             效能类型=eff_type,
             得分来源=source, 区段得分=round(score, 2),
@@ -657,15 +656,7 @@ class StroopEfficacyExp:
         self.win.flip()
         core.wait(self.rng.uniform(0.4, 0.7))
 
-        self._clear_response_buffer()
-        if word:
-            self.word.text = word
-            self.word.color = CFG["COLOR_RGB"][ink]
-            self.word.draw()
-        else:
-            self.square.fillColor = CFG["COLOR_RGB"][ink]
-            self.square.draw()
-        onset = float(self.win.flip())
+        onset = self._present_target(ink, word)
         deadline = onset + timeout
         resp_key, pressed_at = self._wait_for_response(onset, deadline)
         rt = None if pressed_at is None else pressed_at - onset

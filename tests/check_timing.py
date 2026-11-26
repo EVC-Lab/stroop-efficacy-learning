@@ -31,8 +31,14 @@ class VirtualClock:
         self.now += seconds
 
     def flip(self):
-        self.now = (math.floor(self.now / self.frame_period) + 1) * self.frame_period
-        return self.now
+        # Compare against the frame timestamp as division can round down at a boundary.
+        frame = math.floor(self.now / self.frame_period)
+        timestamp = frame * self.frame_period
+        while timestamp <= self.now:
+            frame += 1
+            timestamp = frame * self.frame_period
+        self.now = timestamp
+        return timestamp
 
 
 class VirtualStim:
@@ -70,6 +76,16 @@ class ScriptedKeyboard:
         if available_at is None:
             available_at = timestamp
         self.pending.append((SimpleNamespace(name=name, tDown=timestamp), available_at))
+
+
+def check_virtual_flips():
+    clock = VirtualClock()
+    for frame in range(1, 601):
+        last_flip = clock.getTime()
+        assert clock.flip() > last_flip
+        assert clock.getTime() == frame * clock.frame_period
+    clock.wait(0.010)
+    assert clock.flip() == 601 * clock.frame_period
 
 
 def check_deadline_poll():
@@ -149,21 +165,32 @@ def run_intervals(args):
                 exp.keyboard.queue(key, end + 0.002)
         return timestamp
 
-    def time_feedback(*args, **kwargs):
+    def time_feedback(score, eff_type, deadline, practice=False):
         nonlocal feedback_entered
+        assert deadline == end
+        assert practice == (scenario == "practice_timeout")
         feedback_entered = task.logging.defaultClock.getTime()
-        return real_feedback(*args, **kwargs)
+        return real_feedback(score, eff_type, deadline, practice=practice)
 
     exp._fb_interval = time_feedback
     exp.word.draw = draw
     window.flip = flip
     try:
         for duration in (2.0, 3.0, 4.0):
-            for scenario in ("normal", "before", "at", "after", "none"):
+            scenarios = ("normal", "before", "at", "after", "none")
+            if duration == 2.0:
+                scenarios += ("practice_timeout",)
+            for scenario in scenarios:
                 first_on = end = None
                 target_count = 0
                 n = len(exp.rows_trials)
-                interval = exp.run_interval(len(reports), duration, "performance")
+                practice = scenario == "practice_timeout"
+                previous_total = exp.total_score
+                if practice:
+                    interval = exp.run_interval(None, duration, "random", phase="prac3",
+                                                practice_yoke=task.YokeWindow(init=[30]))
+                else:
+                    interval = exp.run_interval(len(reports), duration, "performance")
                 trials = exp.rows_trials[n:]
                 feedback_delay = interval["反馈翻屏时刻s"] - end
                 feedback_duration = interval["反馈结束时刻s"] - interval["反馈翻屏时刻s"]
@@ -175,9 +202,13 @@ def run_intervals(args):
                     -1e-9 <= feedback_delay <= tolerance
                     and task.CFG["FB_DUR"] - 1e-9 <= feedback_duration <= task.CFG["FB_DUR"] + tolerance
                 )
-                assert interval["区段得分"] == 10 * sum(r["正确"] for r in trials)
-                assert all(r["目标翻屏时刻s"] < end for r in trials)
+                if practice:
+                    assert interval["区段得分"] == 30 and exp.total_score == previous_total
+                else:
+                    assert interval["区段得分"] == 10 * sum(r["正确"] for r in trials)
                 for row in trials:
+                    assert row["作答截止时刻s"] == end
+                    assert row["目标翻屏时刻s"] < end
                     if row["反应键"]:
                         onset = row["目标翻屏时刻s"]
                         press = row["按键时刻s"]
@@ -191,7 +222,7 @@ def run_intervals(args):
                         assert following["目标翻屏时刻s"] - earlier["按键时刻s"] >= args.isi - 1e-9
                 else:
                     assert len(trials) == 1
-                    assert interval["区段得分"] == (10 if scenario == "before" else 0)
+                    assert bool(trials[0]["反应键"]) == (scenario == "before")
                 reports.append({
                     "window_s": duration, "case": scenario,
                     "feedback_delay_ms": round(1000 * feedback_delay, 2),
@@ -216,6 +247,7 @@ def main():
         parser.error("--fullscreen requires --studio")
     if not math.isfinite(args.isi) or args.isi < 0:
         parser.error("--isi must be a finite, non-negative duration")
+    check_virtual_flips()
     check_deadline_poll()
 
     settings = {"FULLSCR": args.fullscreen, "FIX_CHOICES": (0.08,), "ISI_BETWEEN": args.isi}
