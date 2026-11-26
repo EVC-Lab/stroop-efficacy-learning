@@ -1,7 +1,7 @@
 
 """Check interval timing with a virtual clock or a real PsychoPy Studio window.
 
-Usage: python tests/check_timing.py [--studio] [--isi 0.25]
+Usage: python tests/check_timing.py [--studio] [--fullscreen] [--isi 0.25]
 Simulated keypresses use the task's normal event and timing logic. With --studio,
 flip times come from PsychoPy; the test does not measure physical display latency.
 """
@@ -209,13 +209,16 @@ def run_intervals(args):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--studio", action="store_true", help="Use real flips in a Studio window.")
+    parser.add_argument("--fullscreen", action="store_true", help="Use the full-screen acquisition mode.")
     parser.add_argument("--isi", type=float, default=0.25, help="Blank interval in seconds.")
     args = parser.parse_args()
+    if args.fullscreen and not args.studio:
+        parser.error("--fullscreen requires --studio")
     if not math.isfinite(args.isi) or args.isi < 0:
         parser.error("--isi must be a finite, non-negative duration")
     check_deadline_poll()
 
-    settings = {"FULLSCR": False, "FIX_CHOICES": (0.08,), "ISI_BETWEEN": args.isi}
+    settings = {"FULLSCR": args.fullscreen, "FIX_CHOICES": (0.08,), "ISI_BETWEEN": args.isi}
     with patch.dict(task.CFG, settings):
         if args.studio:
             results = run_intervals(args)
@@ -224,7 +227,8 @@ def main():
             # Keep getTime, waits and flips on the same clock in the simulated run.
             with patch.object(task.logging, "defaultClock", virtual), patch.object(task.core, "wait", virtual.wait):
                 results = run_intervals(args)
-    print(json.dumps({"studio": args.studio, "isi_s": args.isi, "intervals": results}, indent=2))
+    print(json.dumps({"studio": args.studio, "fullscreen": args.fullscreen,
+                      "isi_s": args.isi, "intervals": results}, indent=2), flush=True)
     if not all(row["within_flip_tolerance"] for row in results):
         sys.exit("Feedback timing exceeded the tolerance of two refresh periods.")
 
