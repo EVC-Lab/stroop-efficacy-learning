@@ -4,15 +4,18 @@
 用 PsychoPy Studio 的 Coder 运行本文件。流程及快跑设置见 README。
 """
 
-import os
 import csv
+import hashlib
 import json
 import math
+import os
 import random
 import re
 import statistics
-from collections import deque
+import subprocess
+from collections import Counter, deque
 from datetime import datetime
+from pathlib import Path
 
 from psychopy import visual, core, event, gui
 
@@ -39,6 +42,41 @@ def mouse_left_pressed(mouse):
     if hasattr(mouse, "getLeftButtonPressed"):
         return bool(mouse.getLeftButtonPressed())
     return False
+
+
+def code_version():
+    """记录启动时的 Git 版本和脚本摘要，离开仓库运行时仍可核对脚本。"""
+    path = Path(__file__).resolve()
+    try:
+        source_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return "unknown", ""
+
+    def git(*args):
+        return subprocess.check_output(
+            ["git", *args], cwd=path.parent, stderr=subprocess.DEVNULL,
+            text=True, encoding="utf-8", errors="replace", timeout=2,
+            env={**os.environ, "GIT_CONFIG_COUNT": "0"},
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        ).strip()
+
+    try:
+        git("ls-files", "--error-unmatch", "--", path.name)
+        commit = git("rev-parse", "HEAD")
+        if git("status", "--porcelain", "--", path.name):
+            commit += "-dirty"
+    except (OSError, subprocess.SubprocessError):
+        commit = "unknown"
+    return commit, source_hash
+
+
+def stimulus_counts(rows):
+    """按字色和字义统计 16 种正式刺激，保留未出现组合的零计数。"""
+    counts = Counter((r["墨色"], r["词"]) for r in rows)
+    return {
+        ink: {word: counts[ink, word] for word in CFG["WORD"].values()}
+        for ink in CFG["KEYS"]
+    }
 
 
 # ==============================================================================
@@ -221,6 +259,7 @@ class StroopEfficacyExp:
     def __init__(self, info):
         self.outdir = None
         self.update_info(info)
+        self.code_commit, self.script_hash = code_version()
 
         self.rng = random.Random()
         self.traj_seed = CFG["TRAJ_SEED"]
@@ -342,6 +381,7 @@ class StroopEfficacyExp:
 
         main_rows = [r for r in self.rows_intervals if r["阶段"] == "main"]
         scores = [float(r["区段得分"]) for r in main_rows]
+        main_trials = [r for r in self.rows_trials if r["阶段"] == "main"]
         meta = dict(
             姓名=self.name, 被试编号=self.subj, 年龄=self.info.get("年龄", ""),
             性别=self.info.get("性别", ""), 漂移方向=self.group,
@@ -352,7 +392,10 @@ class StroopEfficacyExp:
             yoking窗口均值=round(self.yoke.mean(), 2),
             轨迹种子=self.traj_seed, 效能下限=CFG["P_MIN"], 效能上限=CFG["P_MAX"],
             每对一次得分=CFG["POINT_PER_CORRECT"], 窗口长度选项=list(CFG["WINDOW_CHOICES"]),
-            版本="stroop-efficacy-dev",
+            正式刺激呈现计数=stimulus_counts(main_trials),
+            正式刺激作答计数=stimulus_counts(r for r in main_trials if r["反应键"]),
+            版本="stroop-efficacy-dev", 代码版本=self.code_commit,
+            脚本SHA256=self.script_hash, 运行参数=CFG,
         )
         with open(os.path.join(self.outdir, "meta.json"), "w", encoding="utf-8") as fh:
             json.dump(meta, fh, ensure_ascii=False, indent=2)
@@ -393,9 +436,7 @@ class StroopEfficacyExp:
             self.fb_score.setColor((0.8, 0.8, 0.8))
         self.fb_score.draw()
 
-        if practice:
-            self.fb_source.text = "练习得分：每答对一题得 %d 分" % CFG["POINT_PER_CORRECT"]
-        elif eff_type == "performance":
+        if eff_type == "performance":
             self.fb_source.text = "本段得分取决于你的表现"
         else:
             self.fb_source.text = "本段得分由随机抽取得到"
@@ -454,7 +495,7 @@ class StroopEfficacyExp:
         return row
 
     # ------------------------------------------------------------------ 区段
-    def run_interval(self, idx, window, eff_type=None, p_eff=None, practice=False, phase="main"):
+    def run_interval(self, idx, window, eff_type, p_eff=None, phase="main", practice_yoke=None):
         """跑一个区段：注视点 → 自由作答窗口 → 反馈（2.2）。"""
         # 1) 注视点 1000/1500/2000ms
         self.fix.draw()
@@ -483,18 +524,17 @@ class StroopEfficacyExp:
         elapsed = self.int_clock.getTime()
 
         # 3) 计分（2.2）：表现区段 = 真实得分；随机区段 = 从 yoking 窗口抽
-        if practice:
+        practice = practice_yoke is not None
+        history = practice_yoke if practice else self.yoke
+        if eff_type == "performance":
             score = float(n_correct * CFG["POINT_PER_CORRECT"])
-            source = "练习"
-        elif eff_type == "performance":
-            score = float(n_correct * CFG["POINT_PER_CORRECT"])
-            self.yoke.add(score)
-            self.total_score += score
+            history.add(score)
             source = "表现"
         else:
-            score = self.yoke.sample(self.rng)
-            self.total_score += score
+            score = history.sample(self.rng)
             source = "抽取"
+        if not practice:
+            self.total_score += score
         self._fb_interval(score, eff_type, practice=practice)
 
         n_cong = sum(1 for c in conds if c == "congruent")
@@ -506,7 +546,7 @@ class StroopEfficacyExp:
             正确率=(round(n_correct / float(n_done), 3) if n_done else ""),
             一致比例=(round(n_cong / float(n_done), 3) if n_done else ""),
             效能概率=("" if p_eff is None else round(float(p_eff), 4)),
-            效能类型=("" if eff_type is None else eff_type),
+            效能类型=eff_type,
             得分来源=source, 区段得分=round(score, 2),
             累计得分=round(self.total_score, 2),
         )
@@ -656,10 +696,14 @@ class StroopEfficacyExp:
         self.wait_space(
             "练习 3 / 3：在一个区段内连续作答\n\n"
             "每段给你一段固定的作答时间。每答完一题，就可以继续做下一题。\n"
-            "时间结束后统一结算。本练习每答对一题得 %d 分。\n\n"
+            "时间结束后会显示得分和来源。按表现计分时，每答对一题得 %d 分；"
+            "随机计分时，这一段答对多少题不会改变它的得分。\n\n"
             "按空格开始。" % CFG["POINT_PER_CORRECT"], height=0.036)
-        for _ in range(CFG["N_PRAC3"]):
-            self.run_interval(None, CFG["PRAC_WINDOW"], practice=True, phase="prac3")
+        history = YokeWindow(init=[])
+        for i in range(CFG["N_PRAC3"]):
+            eff_type = "performance" if i % 2 == 0 else "random"
+            self.run_interval(None, CFG["PRAC_WINDOW"], eff_type, phase="prac3",
+                              practice_yoke=history)
 
     # ------------------------------------------------------------------ 休息
     def show_break(self, done, total):
