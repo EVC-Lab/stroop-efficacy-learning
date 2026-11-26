@@ -4,10 +4,14 @@
 
 ## 在 PsychoPy Studio 运行
 
-在 PsychoPy Studio 打开 **Coder**，打开仓库根目录的 [stroop_efficacy_learning.py](stroop_efficacy_learning.py)，点击 **Run**。启动时先检查 Studio 的 Psychtoolbox 键盘后端，然后进入被试登记。被试信息确认后按空格开始，任务中可按 Esc 退出并保存已有记录。
+在 PsychoPy Studio 打开 **Coder**，打开仓库根目录的 [stroop_efficacy_learning.py](stroop_efficacy_learning.py)，点击 **Run**。运行时将同目录的 `stroop_efficacy/` 与主脚本一起保留。启动时先检查 Studio 的 Psychtoolbox 键盘后端，然后进入被试登记。被试信息确认后按空格开始，任务中可按 Esc 退出并保存已有记录。
 
 - **快跑**　将脚本顶部 `CFG` 中的 `DEBUG_FAST` 改为 `True`，以窗口模式运行 12 个区段，作答窗口缩短为 1 秒。适用于检查按键、反馈、探测与导出。
 - **完整流程**　保持 `DEBUG_FAST=False` 和 `SKIP_PRACTICE=False`。以全屏运行三段练习和 288 个正式区段。当前合并版用于开发验证，采集版本将在[路线图](https://gitee.com/evclab/stroop-efficacy-learning/issues/IKY26F)中的验收完成后锁定。
+
+## 程序结构
+
+主脚本负责实验界面、作答与区段流程。[`design.py`](stroop_efficacy/design.py) 管理实验参数、窗长与效能调度和历史积分抽样。[`timing.py`](stroop_efficacy/timing.py) 管理 PTB 按键和截止判定。[`session_data.py`](stroop_efficacy/session_data.py) 负责保存会话文件和记录代码摘要。
 
 ## 作答流程
 
@@ -26,7 +30,7 @@
 
 ## 计时核对
 
-区段从首个目标翻屏开始计时。按键有效时段从本题翻屏起，到固定区段截止时刻前。反应时由 PsychoPy Studio 的 Psychtoolbox 按键时间戳减去目标翻屏时间得到。反馈在截止后翻屏，以实际反馈翻屏为起点计时约 1.5 秒。键盘交互统一使用 PTB，在等待区段反馈时或反馈显示期间按 Esc，会保存该区段记录和中断阶段。反馈前中断时区段得分为空，已显示的反馈会保留积分和实际显示时长。刷新率实测未得到稳定值时，meta.json 会保留用于出题判断的默认帧长，实测刷新率字段记为空值。
+区段从首个目标翻屏开始计时。按键有效时段从本题翻屏起，到固定区段截止时刻前。反应时由 PsychoPy Studio 的 Psychtoolbox 按键时间戳减去目标翻屏时间得到。反馈在截止后翻屏，以实际反馈翻屏为起点计时约 1.5 秒。键盘交互统一使用 PTB，在注视、作答、题间空屏、等待反馈或反馈显示时按 Esc，均会保存当前区段和中断时刻。中断时还未答完的题保留呈现时间并标为「试次中断」，正确字段留空。积分在反馈呈现后才结算。刷新率未测得或明显异常时，记录所采用的备用帧长，实测刷新率字段留空。
 
 在 PsychoPy Studio 的 Python 环境下，从仓库根目录运行：
 
@@ -34,10 +38,16 @@
 python tests/check_timing.py --studio
 ```
 
-脚本在 2、3、4 秒区段验证正常作答、截止前、截止时、截止后和未答。它还覆盖确认页、说明页、探测按键以及反馈前和反馈显示期间的中断保存。真实窗口测试使用模拟按键，以软件时间戳核对计时。可加 `--fullscreen` 复测正式全屏。可用 `--isi 0.15` 对照旧版的题间空屏。
+脚本在 2、3、4 秒区段验证正常作答、截止前、截止时、截止后和未答。它还覆盖确认页、说明页、探测按键以及区段内五个阶段的中断保存和落盘失败后的文件保留。真实窗口测试使用模拟按键，以软件时间戳核对计时。可加 `--fullscreen` 复测正式全屏。可用 `--isi 0.15` 对照旧版的题间空屏。
+
+在采集设备上可运行以下命令，按屏幕提示各轻按一次 D 和 J，核对当前设备的原生 PTB 队列是否能收到首键和已松开的短按，并确认同一次按压只记一次。
+
+```powershell
+python tests/check_timing.py --ptb-keyboard --fullscreen
+```
 
 ## 输出与版本
 
-输出写到脚本旁的 `data/`，包括单题 `trials.csv`、区段 `intervals.csv`、探测 `probes.csv` 和会话信息 `meta.json`。单题表的 `词` 与 `墨色` 记录实际刺激，`反应时` 以秒为单位。区段表分别记录实际开放的作答窗用时、从区段截止到反馈翻屏的延迟、反馈显示时长，以及相关时间戳。它们同单题的目标与按键时间共用 PsychoPy 日志时钟，绝对时间戳在 CSV 以秒保留六位小数。会话信息记录正式任务累计积分、已结算区段数和中断区段数。它也记录 Git 提交、脚本 SHA-256、运行参数和正式任务的字色 × 字义计数。分别统计已呈现和有按键的刺激。数据目录已被 Git 忽略。
+输出写到脚本旁的 `data/`，包括单题 `trials.csv`、区段 `intervals.csv`、探测 `probes.csv` 和会话信息 `meta.json`。单题表的 `词` 与 `墨色` 记录实际刺激，`反应时` 以秒为单位。区段表分别记录实际开放的作答窗用时、从区段截止到反馈翻屏的延迟、反馈显示时长，以及相关时间戳。它们同单题的目标与按键时间共用 PsychoPy 日志时钟，绝对时间戳在 CSV 以秒保留六位小数。会话信息记录正式任务累计积分、已结算区段数和中断区段数。它也记录 Git 提交、主脚本与模块的 SHA-256、运行参数和正式任务的字色 × 字义计数。分别统计已呈现和有按键的刺激。每次保存先在同一数据目录下写完新文件，再逐个替换，防止写入中断截断原文件。数据目录已被 Git 忽略。
 
 迁入的研究一色词版本可从 [`v1.2`](https://gitee.com/evclab/stroop-efficacy-learning/tree/v1.2) 查阅。研究二水果版和原说明见 [`exp2-v1.0`](https://gitee.com/evclab/stroop-efficacy-learning/tree/exp2-v1.0)。

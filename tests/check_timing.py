@@ -1,7 +1,7 @@
 
 """Check interval timing with a virtual clock or a real PsychoPy Studio window.
 
-Usage: python tests/check_timing.py [--studio] [--fullscreen] [--isi 0.25]
+Usage: python tests/check_timing.py [--studio | --ptb-keyboard] [--fullscreen] [--isi 0.25]
 Simulated keypresses use the task's normal event and timing logic. With --studio,
 flip times come from PsychoPy; the test does not measure physical display latency.
 """
@@ -18,6 +18,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import stroop_efficacy_learning as task
+from stroop_efficacy import session_data
 
 
 class VirtualClock:
@@ -29,7 +30,7 @@ class VirtualClock:
     def getTime(self):
         return self.now
 
-    def wait(self, seconds):
+    def wait(self, seconds, **_):
         self.now += seconds
 
     def flip(self):
@@ -99,24 +100,34 @@ def check_virtual_flips():
 
 def check_deadline_poll():
     """An on-time press can be retrieved after cutoff. A press at cutoff is excluded."""
-    exp = task.StroopEfficacyExp.__new__(task.StroopEfficacyExp)
     clock = VirtualClock()
-    exp.response_keys = ["d", "f", "escape"]
-    exp.last_key_down = {}
-    exp.keyboard = ScriptedKeyboard(clock.getTime)
-    with patch.object(task.logging, "defaultClock", clock):
+    response_keys = ["d", "f", "escape"]
+    timed_input = task.TimedInput(ScriptedKeyboard(clock.getTime))
+    with patch.object(task.psylog, "defaultClock", clock):
         clock.now = 2.01
-        exp.keyboard.queue("f", 2.003)
-        exp.keyboard.queue("d", 1.999, available_at=2.005, released=True)
-        assert exp._wait_for_response(1.0, 2.0) == ("d", 1.999)
-        exp.keyboard.queue("d", 0.999)
-        exp.keyboard.queue("d", 2.0)
-        exp.keyboard.queue("d", 2.001)
-        assert exp._wait_for_response(1.0, 2.0) == ("", None)
-        exp.keyboard.queue("space", 2.005)
-        assert [key.name for key in exp._poll_keys(["space"])] == ["space"]
-        exp.keyboard.queue("space", 2.005, released=True)
-        assert exp._poll_keys(["space"]) == []
+        timed_input.keyboard.queue("f", 2.003)
+        timed_input.keyboard.queue("d", 1.999, available_at=2.005, released=True)
+        assert timed_input.wait_for_response(response_keys, 1.0, 2.0) == ("d", 1.999, None)
+        timed_input.keyboard.queue("d", 0.999)
+        timed_input.keyboard.queue("d", 2.0)
+        timed_input.keyboard.queue("d", 2.001)
+        assert timed_input.wait_for_response(response_keys, 1.0, 2.0) == ("", None, None)
+        timed_input.keyboard.queue("space", 2.005)
+        assert [key.name for key in timed_input.poll_keys(["space"])] == ["space"]
+        timed_input.keyboard.queue("space", 2.005, released=True)
+        assert timed_input.poll_keys(["space"]) == []
+        timed_input.keyboard.queue("d", 2.006)
+        timed_input.keyboard.queue("escape", 2.007)
+        timed_input.keyboard.queue("f", 2.008)
+        assert timed_input.wait_for_response(response_keys, 2.0, 3.0) == ("d", 2.006, 2.007)
+
+
+def check_refresh_rate():
+    assert task.resolve_frame_timing(60.0, None) == (60.0, 1 / 60)
+    assert task.resolve_frame_timing(360.0, None) == (360.0, 1 / 360)
+    for measured in (None, 0.0, 1.0, 5000.0, math.nan, math.inf):
+        assert task.resolve_frame_timing(measured, 1 / 144) == (None, 1 / 144)
+    assert task.resolve_frame_timing(math.nan, math.inf) == (None, 1 / 60)
 
 
 def check_interface_keys(exp):
@@ -130,7 +141,7 @@ def check_interface_keys(exp):
             timestamp = float(original_flip())
             if queued:
                 for key, delay in queued:
-                    exp.keyboard.queue(key, timestamp + delay, released=True)
+                    exp.timed_input.keyboard.queue(key, timestamp + delay, released=True)
                 queued.clear()
             return timestamp
 
@@ -153,91 +164,205 @@ def check_interface_keys(exp):
         assert task.mouse_left_pressed(SimpleNamespace(getLeftButtonPressed=lambda: pressed)) is pressed
 
 
-def check_feedback_interruptions(exp):
+def check_interval_interruptions(exp):
     original_flip = exp.win.flip
     original_draw = exp.fb_source.draw
     original_target = exp._present_target
 
-    def present_with_response(ink, word):
-        onset = original_target(ink, word)
-        exp.keyboard.queue(task.CFG["KEYS"][ink], onset + 0.12)
-        return onset
-
-    for interrupt_during_feedback in (False, True):
+    stages = ("注视中", "作答中", "题间空屏", "反馈前", "反馈中")
+    for index, stage in enumerate(stages):
+        n_flips = 0
+        n_targets = 0
         pending_feedback = False
+
+        def present_with_response(ink, word):
+            nonlocal n_targets
+            onset = original_target(ink, word)
+            n_targets += 1
+            if stage == "作答中" and n_targets == 2:
+                exp.timed_input.keyboard.queue("escape", onset + 0.075, released=True)
+            else:
+                exp.timed_input.keyboard.queue(task.CFG["KEYS"][ink], onset + 0.12)
+            return onset
 
         def feedback_draw():
             nonlocal pending_feedback
             original_draw()
-            if interrupt_during_feedback:
+            if stage == "反馈中":
                 pending_feedback = True
-            else:
-                stop_at = float(task.logging.defaultClock.getTime()) + 0.075
-                exp.keyboard.queue("escape", stop_at, released=True)
+            elif stage == "反馈前":
+                stop_at = float(task.psylog.defaultClock.getTime()) + 0.075
+                exp.timed_input.keyboard.queue("escape", stop_at, released=True)
 
-        def feedback_flip():
-            nonlocal pending_feedback
+        def flip():
+            nonlocal n_flips, pending_feedback
             timestamp = float(original_flip())
-            if pending_feedback:
-                exp.keyboard.queue("escape", timestamp + 0.075, released=True)
+            n_flips += 1
+            if pending_feedback or (stage == "注视中" and n_flips == 1) or (stage == "题间空屏" and n_flips == 3):
+                stop_delay = 0.025 if stage == "注视中" else 0.075
+                exp.timed_input.keyboard.queue("escape", timestamp + stop_delay, released=True)
                 pending_feedback = False
             return timestamp
 
         before_total = exp.total_score
         before_history = list(exp.yoke.buf)
         before_intervals = len(exp.rows_intervals)
+        before_trials = len(exp.rows_trials)
+        duration = 1.4 if stage in ("作答中", "题间空屏") else 0.6
         with TemporaryDirectory() as directory:
             exp.outdir = directory
             with (patch.object(exp.fb_source, "draw", feedback_draw),
                   patch.object(exp, "_present_target", present_with_response),
-                  patch.object(exp.win, "flip", feedback_flip),
+                  patch.object(exp.win, "flip", flip),
                   patch.object(exp.win, "close") as close,
-                  patch.object(task.core, "quit", side_effect=SystemExit)):
+                  patch.object(task.core, "quit", side_effect=SystemExit),
+                  patch.dict(task.CFG, {"ISI_BETWEEN": 0.25})):
                 try:
-                    exp.run_interval(900 + int(interrupt_during_feedback), 0.6, "performance")
+                    exp.run_interval(900 + index, duration, "performance")
                 except SystemExit:
                     close.assert_called_once()
                 else:
-                    raise AssertionError("Esc did not interrupt the interval")
+                    raise AssertionError(f"Esc did not interrupt during {stage}")
 
             assert len(exp.rows_intervals) == before_intervals + 1
             row = exp.rows_intervals[-1]
-            assert row["试次数"] == row["正确数"] == 1
-            assert row["反馈中断"] == int(interrupt_during_feedback)
             with (Path(directory) / "intervals.csv").open(encoding="utf-8-sig", newline="") as stream:
                 intervals = list(csv.DictReader(stream))
             saved = intervals[-1]
+            with (Path(directory) / "trials.csv").open(encoding="utf-8-sig", newline="") as stream:
+                trials = list(csv.DictReader(stream))
             meta = json.loads((Path(directory) / "meta.json").read_text(encoding="utf-8"))
+            assert len(trials) == before_trials + row["试次数"]
+            assert all(r["区段"] == saved["区段"] for r in trials[before_trials:])
+            assert saved["中断阶段"] == stage
+            assert float(saved["中断时刻s"]) >= float(saved["注视翻屏时刻s"])
+            assert row["反馈中断"] == int(stage == "反馈中")
             assert meta["实测刷新率Hz"] == exp.refresh_hz
             assert meta["出题估计帧长s"] == exp.frame_period
             assert meta["总分"] == float(saved["累计得分"])
             assert meta["总分"] == sum(float(r["区段得分"]) for r in intervals
                                        if r["阶段"] == "main" and r["区段得分"] != "")
             assert meta["中断区段数"] == sum(bool(r["中断阶段"]) for r in intervals if r["阶段"] == "main")
-            if interrupt_during_feedback:
-                assert saved["中断阶段"] == "反馈中"
+            if stage == "注视中":
+                assert row["试次数"] == row["正确数"] == 0
+                assert saved["区段开始时刻s"] == saved["区段截止时刻s"] == saved["作答窗用时s"] == ""
+            else:
+                assert row["试次数"] == (2 if stage == "作答中" else 1)
+                assert row["正确数"] == 1 and row["正确率"] == 1
+                assert row["作答窗用时s"] > 0
+            if stage == "作答中":
+                assert trials[-1]["试次中断"] == "1"
+                assert trials[-1]["正确"] == trials[-1]["按键时刻s"] == ""
+            if stage == "反馈中":
                 assert 0.075 <= row["反馈时长s"] < 0.250
                 assert row["反馈延迟s"] >= 0
                 assert saved["反馈结束时刻s"] == f"{row['反馈结束时刻s']:.6f}"
-                assert row["作答窗用时s"] == 0.6
+                assert row["作答窗用时s"] == duration
                 assert exp.total_score == before_total + 10
                 assert exp.yoke.buf[-1] == 10
             else:
-                assert saved["中断阶段"] == "反馈前"
                 assert saved["反馈翻屏时刻s"] == saved["区段得分"] == ""
-                assert 0 < row["作答窗用时s"] < 0.6
                 assert exp.total_score == before_total
                 assert list(exp.yoke.buf) == before_history
-    print("UI input, both mouse APIs, and abort saving before and during feedback passed.")
+    print("UI input, both mouse APIs, and abort saving in all five interval stages passed.")
+
+
+def check_failed_save(exp):
+    """A partial write in staging cannot damage the previously published files."""
+    def fail_after_partial_write(_meta, stream, **_):
+        stream.write("{")
+        raise OSError("simulated write failure")
+
+    with TemporaryDirectory() as directory, patch.object(exp, "outdir", directory):
+        exp.save()
+        before = {path.name: path.read_bytes() for path in Path(directory).iterdir()}
+        assert set(before) == {"trials.csv", "intervals.csv", "probes.csv", "meta.json"}
+        with (patch.object(exp, "rows_intervals", exp.rows_intervals[:-1]),
+              patch.object(session_data.json, "dump", fail_after_partial_write)):
+            try:
+                exp.save()
+            except OSError as exc:
+                assert str(exc) == "simulated write failure"
+            else:
+                raise AssertionError("The simulated write failure did not reach save()")
+        assert {path.name: path.read_bytes() for path in Path(directory).iterdir()} == before
+    print("A failed staged save left all four previous files intact.")
+
+
+def check_ptb_clock(keyboard):
+    """Check the Studio PTB conversion using its native clock and a constructed event."""
+    from psychopy.hardware.keyboard import keyNames
+    from psychtoolbox import GetSecs
+
+    code = next(code for code, name in keyNames.items() if name == "d")
+    device = keyboard.device
+    before = task.psylog.defaultClock.getTime()
+    ptb_time = GetSecs()
+    down = device.parseMessage({"down": True, "keycode": code, "time": ptb_time})
+    after = task.psylog.defaultClock.getTime()
+    device.parseMessage({"down": False, "keycode": code, "time": ptb_time + 0.05})
+    assert before - 0.001 <= down.tDown <= after + 0.001, (before, down.tDown, after)
+    assert down.name == "d" and math.isclose(down.duration, 0.05, abs_tol=0.000001)
+    timed_input = task.TimedInput(keyboard)
+    device.responses.append(down)
+    assert timed_input.poll_keys(["d"]) == [down]
+    assert timed_input.poll_keys(["d"]) == []
+
+    ptb_time = GetSecs()
+    held = device.parseMessage({"down": True, "keycode": code, "time": ptb_time})
+    device.responses.append(held)
+    assert timed_input.poll_keys(["d"]) == [held]
+    released = device.parseMessage({"down": False, "keycode": code, "time": ptb_time + 0.05})
+    assert released is held
+    device.responses.append(released)
+    assert timed_input.poll_keys(["d"]) == []
+    print("Native PTB clock conversion and de-duplication passed with constructed device events.")
+
+
+def check_native_keyboard():
+    """Observe a live PTB press and one tap released before either poll."""
+    exp = task.StroopEfficacyExp({"被试编号": "QA-PTB", "漂移方向": "正向"})
+    view = task.visual.TextStim(exp.win, font=task.CFG["FONT"], height=0.04)
+    exp.win.winHandle.set_caption("PsychoPy Studio PTB test")
+    try:
+        exp.timed_input.keyboard.clearEvents()
+        view.text = "PTB 键盘检查 1 / 2\n\n请轻按一次 D 并松开。"
+        view.draw()
+        onset = float(exp.win.flip())
+        key, t_down, escape_at = exp.timed_input.wait_for_response(exp.response_keys, onset, onset + 60)
+        assert key == "d" and escape_at is None, "PTB did not capture the first D press"
+        observed = task.psylog.defaultClock.getTime()
+        tolerance = max(2 * exp.frame_period, 0.025)
+        assert onset <= t_down <= observed and observed - t_down < tolerance
+        task.core.wait(0.3, hogCPUperiod=0.001)
+        assert exp.timed_input.poll_keys(["d"]) == [], "D release counted as a second press"
+        print(f"PTB first D poll lag: {(observed - t_down) * 1000:.2f} ms.", flush=True)
+
+        exp.timed_input.keyboard.clearEvents()
+        view.text = "PTB 键盘检查 2 / 2\n\n请在 30 秒内轻按一次 J 并松开。"
+        view.draw()
+        onset = float(exp.win.flip())
+        task.core.wait(30.0, hogCPUperiod=0.001)
+        keys = exp.timed_input.poll_keys(["j"])
+        assert len(keys) == 1, f"Expected one completed J press, got {len(keys)}"
+        assert onset <= keys[0].tDown < onset + 30.0
+        assert keys[0].duration is not None and keys[0].duration > 0
+        assert exp.timed_input.poll_keys(["j"]) == [], "Completed J press was returned twice"
+        print("Live PTB press and completed tap, timestamps and de-duplication passed.", flush=True)
+    finally:
+        exp.timed_input.keyboard.stop()
+        exp.win.close()
 
 
 def run_intervals(args):
     if args.studio:
         exp = task.StroopEfficacyExp({"被试编号": "QA-TIMING", "漂移方向": "正向"})
-        assert exp.keyboard.getBackend() == "ptb"
+        assert exp.timed_input.keyboard.getBackend() == "ptb"
+        check_ptb_clock(exp.timed_input.keyboard)
+        exp.timed_input.keyboard.stop()
         window = exp.win
     else:
-        clock = task.logging.defaultClock
+        clock = task.psylog.defaultClock
         window = SimpleNamespace(
             flip=clock.flip, monitorFramePeriod=clock.frame_period,
             getActualFrameRate=lambda **_: 1 / clock.frame_period,
@@ -247,10 +372,11 @@ def run_intervals(args):
             Window=lambda **_settings: window, TextStim=VirtualStim, Rect=VirtualStim,
             Line=VirtualStim, Circle=VirtualStim,
         )
-        with patch.multiple(task, visual=virtual_visual, Keyboard=lambda **_: ScriptedKeyboard(clock.getTime)):
-            exp = task.StroopEfficacyExp({"被试编号": "QA-TIMING", "漂移方向": "正向"})
+        with patch.object(task, "visual", virtual_visual):
+            exp = task.StroopEfficacyExp({"被试编号": "QA-TIMING", "漂移方向": "正向"},
+                                        keyboard=ScriptedKeyboard(clock.getTime))
 
-    exp.keyboard = ScriptedKeyboard(task.logging.defaultClock.getTime)
+    exp.timed_input.keyboard = ScriptedKeyboard(task.psylog.defaultClock.getTime)
     real_flip = window.flip
     real_draw = exp.word.draw
     real_feedback = exp._fb_interval
@@ -288,21 +414,21 @@ def run_intervals(args):
         if key is None:
             raise AssertionError(f"Unexpected stimulus color {color!r}")
         if scenario == "normal" and timestamp + 0.27 < end:
-            exp.keyboard.queue(key, timestamp + 0.27)
+            exp.timed_input.keyboard.queue(key, timestamp + 0.27)
         elif target_count == 1:
             if scenario == "before":
-                exp.keyboard.queue(key, end - 0.005, available_at=end)
+                exp.timed_input.keyboard.queue(key, end - 0.005, available_at=end)
             elif scenario == "at":
-                exp.keyboard.queue(key, end)
+                exp.timed_input.keyboard.queue(key, end)
             elif scenario == "after":
-                exp.keyboard.queue(key, end + 0.002)
+                exp.timed_input.keyboard.queue(key, end + 0.002)
         return timestamp
 
     def time_feedback(score, eff_type, deadline, practice=False):
         nonlocal feedback_entered
         assert deadline == end
         assert practice == (scenario == "practice_timeout")
-        feedback_entered = task.logging.defaultClock.getTime()
+        feedback_entered = task.psylog.defaultClock.getTime()
         return real_feedback(score, eff_type, deadline, practice=practice)
 
     exp._fb_interval = time_feedback
@@ -373,7 +499,8 @@ def run_intervals(args):
         text_stim = task.visual.TextStim if args.studio else VirtualStim
         with patch.object(task.visual, "TextStim", text_stim):
             check_interface_keys(exp)
-        check_feedback_interruptions(exp)
+        check_interval_interruptions(exp)
+        check_failed_save(exp)
     finally:
         window.close()
 
@@ -382,18 +509,25 @@ def run_intervals(args):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--studio", action="store_true", help="Use real flips in a Studio window.")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--studio", action="store_true", help="Use real flips in a Studio window.")
+    modes.add_argument("--ptb-keyboard", action="store_true", help="Check the native PTB queue with two live keypresses.")
     parser.add_argument("--fullscreen", action="store_true", help="Use the full-screen acquisition mode.")
     parser.add_argument("--isi", type=float, default=0.25, help="Blank interval in seconds.")
     args = parser.parse_args()
     if not __debug__:
         parser.error("Run without Python optimization so timing assertions remain enabled")
-    if args.fullscreen and not args.studio:
-        parser.error("--fullscreen requires --studio")
+    if args.fullscreen and not (args.studio or args.ptb_keyboard):
+        parser.error("--fullscreen requires --studio or --ptb-keyboard")
+    if args.ptb_keyboard:
+        with patch.dict(task.CFG, {"FULLSCR": args.fullscreen}):
+            check_native_keyboard()
+        return
     if not math.isfinite(args.isi) or args.isi < 0:
         parser.error("--isi must be a finite, non-negative duration")
     check_virtual_flips()
     check_deadline_poll()
+    check_refresh_rate()
 
     settings = {"FULLSCR": args.fullscreen, "FIX_CHOICES": (0.08,), "ISI_BETWEEN": args.isi}
     with patch.dict(task.CFG, settings):
@@ -402,7 +536,7 @@ def main():
         else:
             virtual = VirtualClock()
             # Keep getTime, waits and flips on the same clock in the simulated run.
-            with patch.object(task.logging, "defaultClock", virtual), patch.object(task.core, "wait", virtual.wait):
+            with patch.object(task.psylog, "defaultClock", virtual), patch.object(task.core, "wait", virtual.wait):
                 results = run_intervals(args)
     print(json.dumps({"studio": args.studio, "fullscreen": args.fullscreen,
                       "isi_s": args.isi, "intervals": results}, indent=2), flush=True)
