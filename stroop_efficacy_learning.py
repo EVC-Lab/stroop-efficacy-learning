@@ -256,8 +256,15 @@ def make_score_schedule(n_intervals, rng):
 # ==============================================================================
 #  三、实验主流程
 # ==============================================================================
+def open_timed_keyboard():
+    keyboard = Keyboard(backend="ptb", waitForStart=True)
+    if keyboard.getBackend() != "ptb":
+        raise RuntimeError("请用 PsychoPy Studio 的 Python 环境运行，并确认 Psychtoolbox 键盘后端可用。")
+    return keyboard
+
+
 class StroopEfficacyExp:
-    def __init__(self, info):
+    def __init__(self, info, keyboard=None):
         self.outdir = None
         self.update_info(info)
         self.code_commit, self.script_hash = code_version()
@@ -266,9 +273,8 @@ class StroopEfficacyExp:
         self.traj_seed = CFG["TRAJ_SEED"]
         self.rng.seed("%s-%s" % (self.subj, self.group))   # 每个被试可复现
 
-        self.keyboard = Keyboard(backend="ptb")
-        if self.keyboard.getBackend() != "ptb":
-            raise RuntimeError("需要 PsychoPy Studio 的 Psychtoolbox 键盘后端来记录按键时间。")
+        self.keyboard = open_timed_keyboard() if keyboard is None else keyboard
+        self.last_key_down = {}
 
         core.checkPygletDuringWait = False
         self.win = visual.Window(
@@ -276,6 +282,10 @@ class StroopEfficacyExp:
             units="height", allowGUI=False, checkTiming=False, waitBlanking=True,
         )
         self.win.setMouseVisible(False)
+        measured_hz = self.win.getActualFrameRate(infoMsg="正在测量显示器刷新率，请稍候")
+        self.refresh_hz = None if measured_hz is None else float(measured_hz)
+        self.frame_period = 1.0 / self.refresh_hz if self.refresh_hz else self.win.monitorFramePeriod
+        self.keyboard.start()
 
         f = CFG["FONT"]
         self.fix = visual.TextStim(self.win, "+", font=f, color=(1, 1, 1), height=0.09)
@@ -346,18 +356,14 @@ class StroopEfficacyExp:
             "\n\n信息有误：按 R 重新填写        确认无误：按 空格 开始",
             font=CFG["FONT"], color=(1, 1, 1), height=0.045, wrapWidth=1.15,
             alignText="center")
+        self.keyboard.clearEvents()
         stim.draw()
-        self.win.flip()
-        event.clearEvents()
-        while True:
-            keys = event.waitKeys(keyList=["space", "r", "escape"])
-            if keys and keys[0] == "escape":
-                self.win.close()
-                core.quit()
-            if keys and keys[0] == "r":
-                return False
-            if keys and keys[0] == "space":
-                return True
+        onset = float(self.win.flip())
+        key = self._wait_for_ui_key(onset, ["space", "r"])
+        if key == "escape":
+            self.win.close()
+            core.quit()
+        return key == "space"
 
     # ------------------------------------------------------------------ 输出
     def _make_outdir(self):
@@ -380,7 +386,11 @@ class StroopEfficacyExp:
             with open(path, "w", newline="", encoding="utf-8-sig") as fh:
                 w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
                 w.writeheader()
-                w.writerows(rows)
+                w.writerows(
+                    {field: f"{value:.6f}" if field.endswith("时刻s") and isinstance(value, float) else value
+                     for field, value in row.items()}
+                    for row in rows
+                )
 
         main_rows = [r for r in self.rows_intervals if r["阶段"] == "main"]
         scores = [float(r["区段得分"]) for r in main_rows]
@@ -400,6 +410,7 @@ class StroopEfficacyExp:
             版本="stroop-efficacy-dev", 代码版本=self.code_commit,
             脚本SHA256=self.script_hash, 运行参数=CFG,
             定时键盘后端=self.keyboard.getBackend(),
+            实测刷新率Hz=self.refresh_hz, 出题估计帧长s=self.frame_period,
         )
         with open(os.path.join(self.outdir, "meta.json"), "w", encoding="utf-8") as fh:
             json.dump(meta, fh, ensure_ascii=False, indent=2)
@@ -410,42 +421,69 @@ class StroopEfficacyExp:
     def wait_space(self, text, height=0.042, color=(1, 1, 1)):
         stim = visual.TextStim(self.win, text, font=CFG["FONT"], color=color,
                                height=height, wrapWidth=1.1, alignText="center")
+        self._clear_response_buffer()
         stim.draw()
-        self.win.flip()
-        event.clearEvents()
-        while True:
-            k = event.waitKeys(keyList=["space", "escape"])
-            if k and k[0] == "escape":
-                self.abort()
-            if k and k[0] == "space":
-                return
+        onset = float(self.win.flip())
+        if self._wait_for_ui_key(onset, ["space"]) == "escape":
+            self.abort()
 
     def abort(self):
         self.save(verbose=True)
         self.win.close()
         core.quit()
 
+    def _poll_keys(self, key_list):
+        # PTB 的按下和已释放事件都要读取。一次按键只处理一次。
+        presses = self.keyboard.getKeys(keyList=key_list, waitRelease=False)
+        presses += self.keyboard.getKeys(keyList=key_list, waitRelease=True)
+        keys = []
+        for key in sorted(presses, key=lambda press: press.tDown):
+            if key.tDown > self.last_key_down.get(key.name, -math.inf):
+                self.last_key_down[key.name] = key.tDown
+                keys.append(key)
+        return keys
+
+    def _wait_for_ui_key(self, onset, names):
+        key_list = [*names, "escape"]
+        while True:
+            keys = self._poll_keys(key_list)
+            if any(key.name == "escape" for key in keys):
+                return "escape"
+            for key in keys:
+                if key.tDown >= onset:
+                    return key.name
+            core.wait(0.010)
+
     def check_escape(self):
-        if "escape" in event.getKeys(keyList=["escape"]):
+        if self._poll_keys(["escape"]):
             self.abort()
 
     @staticmethod
     def _wait_until(timestamp):
         core.wait(max(0.0, timestamp - logging.defaultClock.getTime()))
 
+    def _wait_until_or_escape(self, timestamp):
+        """等到指定时刻，期间按 Esc 时返回 True。"""
+        while True:
+            if self._poll_keys(["escape"]):
+                return True
+            remaining = timestamp - logging.defaultClock.getTime()
+            if remaining <= 0:
+                return False
+            core.wait(min(remaining, 0.010))
+
     def _clear_response_buffer(self):
-        if self.keyboard.getKeys(keyList=["escape"], waitRelease=False):
-            self.abort()
+        self.check_escape()
         self.keyboard.clearEvents()
 
     def _wait_for_response(self, onset, deadline):
         """翻屏和 PTB 按下时刻共用 PsychoPy 的日志时钟。"""
         while True:
             poll_time = logging.defaultClock.getTime()
-            keys = self.keyboard.getKeys(keyList=self.response_keys, waitRelease=False)
+            keys = self._poll_keys(self.response_keys)
             if any(press.name == "escape" for press in keys):
                 self.abort()
-            for press in sorted(keys, key=lambda key: key.tDown):
+            for press in keys:
                 if onset <= press.tDown < deadline:
                     return press.name, press.tDown
             if poll_time >= deadline:
@@ -471,14 +509,15 @@ class StroopEfficacyExp:
         self.fb_source.draw()
 
         if CFG["SHOW_TOTAL_SCORE"] and not practice:
-            self.fb_total.text = "累计 %d 分" % int(round(self.total_score))
+            self.fb_total.text = "累计 %d 分" % int(round(self.total_score + score))
             self.fb_total.draw()
 
-        self._wait_until(deadline)
+        if self._wait_until_or_escape(deadline):
+            self.abort()
         onset = float(self.win.flip())
-        self._wait_until(onset + CFG["FB_DUR"])
+        interrupted = self._wait_until_or_escape(onset + CFG["FB_DUR"])
         offset = float(self.win.flip())
-        return onset, offset
+        return onset, offset, interrupted
 
     # ------------------------------------------------------------------ 单试次
     def make_trial_content(self):
@@ -513,7 +552,7 @@ class StroopEfficacyExp:
         n_done = 0
         n_correct = 0
         n_congruent = 0
-        frame_period = self.win.monitorFramePeriod
+        frame_period = self.frame_period
         while True:
             ink, word, condition = self.make_trial_content()
             onset = self._present_target(ink, word)
@@ -559,21 +598,22 @@ class StroopEfficacyExp:
         history = practice_yoke if practice else self.yoke
         if eff_type == "performance":
             score = float(n_correct * CFG["POINT_PER_CORRECT"])
-            history.add(score)
             source = "表现"
         else:
             score = history.sample(self.rng)
             source = "抽取"
+        feedback_on, feedback_off, interrupted = self._fb_interval(score, eff_type, deadline, practice=practice)
+        if eff_type == "performance":
+            history.add(score)
         if not practice:
             self.total_score += score
-        feedback_on, feedback_off = self._fb_interval(score, eff_type, deadline, practice=practice)
 
         row = dict(
             被试=self.subj, 组别=self.group, 阶段=phase,
             区段=("" if idx is None else idx + 1),
             窗口s=window, 实际用时s=round(feedback_on - interval_start, 4),
             注视翻屏时刻s=fixation_on, 区段开始时刻s=interval_start, 区段截止时刻s=deadline,
-            反馈翻屏时刻s=feedback_on, 反馈结束时刻s=feedback_off,
+            反馈翻屏时刻s=feedback_on, 反馈结束时刻s=feedback_off, 反馈中断=int(interrupted),
             试次数=n_done, 正确数=n_correct,
             正确率=(round(n_correct / float(n_done), 3) if n_done else ""),
             一致比例=(round(n_congruent / float(n_done), 3) if n_done else ""),
@@ -583,6 +623,8 @@ class StroopEfficacyExp:
             累计得分=round(self.total_score, 2),
         )
         self.rows_intervals.append(row)
+        if interrupted:
+            self.abort()
         self.check_escape()
         return row
 
@@ -603,10 +645,10 @@ class StroopEfficacyExp:
         x_lo, x_hi = -0.30, 0.30
         x = 0.0
         moved = False
+        self._clear_response_buffer()
         t0 = core.getTime()
 
         while True:
-            self.check_escape()
             if mouse_left_pressed(mouse):
                 mx, my = mouse.getPos()
                 if abs(my - (-0.04)) < 0.14:      # 只在量表条附近才算有效拖动
@@ -614,7 +656,7 @@ class StroopEfficacyExp:
                     if abs(nx - x) > 1e-4:
                         moved = True
                     x = nx
-            keys = event.getKeys(keyList=["space", "escape", "left", "right"])
+            keys = {key.name for key in self._poll_keys(["space", "escape", "left", "right"])}
             if "left" in keys:                    # 键盘兜底：鼠标失灵也能作答
                 x = max(x_lo, x - 0.02)
                 moved = True
@@ -770,7 +812,9 @@ class StroopEfficacyExp:
     # ------------------------------------------------------------------ 主流程
     def run(self):
         while not self.confirm_info():
+            self.keyboard.stop()
             self.update_info(ask_info(prev=self.info))
+            self.keyboard.start()
         if not CFG.get("SKIP_PRACTICE", False):
             self.practice_mapping()
             self.practice_color_word()
@@ -817,8 +861,16 @@ def ask_info(prev=None):
 
 
 if __name__ == "__main__":
+    try:
+        keyboard = open_timed_keyboard()
+    except (ImportError, OSError, RuntimeError) as exc:
+        dialog = gui.Dlg(title="无法初始化实验键盘")
+        dialog.addText("请在 PsychoPy Studio 中检查 Psychtoolbox 键盘后端。")
+        dialog.addText(str(exc))
+        dialog.show()
+        core.quit()
     info = ask_info()
-    exp = StroopEfficacyExp(info)
+    exp = StroopEfficacyExp(info, keyboard=keyboard)
     try:
         exp.run()
     except SystemExit:

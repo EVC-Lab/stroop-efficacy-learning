@@ -7,10 +7,12 @@ flip times come from PsychoPy; the test does not measure physical display latenc
 """
 
 import argparse
+import csv
 import json
 import math
 import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -61,6 +63,12 @@ class ScriptedKeyboard:
     def getBackend(self):
         return "ptb"
 
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
     def clearEvents(self):
         self.pending.clear()
 
@@ -68,14 +76,15 @@ class ScriptedKeyboard:
         ready = [
             key for key, available_at in self.pending
             if available_at <= self.now() and (not keyList or key.name in keyList)
+            and key.released == waitRelease
         ]
         self.pending = [(key, at) for key, at in self.pending if key not in ready]
         return ready
 
-    def queue(self, name, timestamp, available_at=None):
+    def queue(self, name, timestamp, available_at=None, released=False):
         if available_at is None:
             available_at = timestamp
-        self.pending.append((SimpleNamespace(name=name, tDown=timestamp), available_at))
+        self.pending.append((SimpleNamespace(name=name, tDown=timestamp, released=released), available_at))
 
 
 def check_virtual_flips():
@@ -93,17 +102,97 @@ def check_deadline_poll():
     exp = task.StroopEfficacyExp.__new__(task.StroopEfficacyExp)
     clock = VirtualClock()
     exp.response_keys = ["d", "f", "escape"]
+    exp.last_key_down = {}
     exp.keyboard = ScriptedKeyboard(clock.getTime)
     with patch.object(task.logging, "defaultClock", clock):
         clock.now = 2.01
         exp.keyboard.queue("f", 2.003)
-        exp.keyboard.queue("d", 1.999, available_at=2.005)
+        exp.keyboard.queue("d", 1.999, available_at=2.005, released=True)
         assert exp._wait_for_response(1.0, 2.0) == ("d", 1.999)
         exp.keyboard.queue("d", 0.999)
         exp.keyboard.queue("d", 2.0)
         exp.keyboard.queue("d", 2.001)
         assert exp._wait_for_response(1.0, 2.0) == ("", None)
+        exp.keyboard.queue("space", 2.005)
+        assert [key.name for key in exp._poll_keys(["space"])] == ["space"]
+        exp.keyboard.queue("space", 2.005, released=True)
+        assert exp._poll_keys(["space"]) == []
 
+
+def check_interface_keys(exp):
+    """Exercise confirmation, instructions, the probe and abort saving through the PTB input path."""
+    original_flip = exp.win.flip
+
+    def on_flip(*events):
+        queued = list(events)
+
+        def flip():
+            timestamp = float(original_flip())
+            if queued:
+                for key, delay in queued:
+                    exp.keyboard.queue(key, timestamp + delay, released=True)
+                queued.clear()
+            return timestamp
+
+        return patch.object(exp.win, "flip", flip)
+
+    with on_flip(("r", 0.020)):
+        assert exp.confirm_info() is False
+    with on_flip(("space", 0.020)):
+        assert exp.confirm_info() is True
+    with on_flip(("space", 0.020)):
+        exp.wait_space("用空格继续")
+
+    mouse = SimpleNamespace(getPressed=lambda: [False])
+    with patch.object(task, "MouseClass", lambda **_: mouse), on_flip(("right", 0.010), ("space", 0.030)):
+        exp.run_probe("efficacy", after_interval=0)
+    assert exp.rows_probes[-1]["评价值"] > 50
+
+    original_draw = exp.fb_source.draw
+    show_feedback = False
+    aborted = False
+
+    def feedback_draw():
+        nonlocal show_feedback
+        original_draw()
+        show_feedback = True
+
+    def feedback_flip():
+        nonlocal show_feedback
+        timestamp = float(original_flip())
+        if show_feedback:
+            exp.keyboard.queue("escape", timestamp + 0.075, released=True)
+            show_feedback = False
+        return timestamp
+
+    with TemporaryDirectory() as directory:
+        exp.outdir = directory
+        with (patch.object(exp.fb_source, "draw", feedback_draw),
+              patch.object(exp.win, "flip", feedback_flip),
+              patch.object(exp.win, "close") as close,
+              patch.object(task.core, "quit", side_effect=SystemExit)):
+            try:
+                exp.run_interval(0, 0.6, "random")
+            except SystemExit:
+                aborted = True
+            assert aborted
+            close.assert_called_once()
+        row = exp.rows_intervals[-1]
+        assert row["反馈中断"] == 1
+        feedback_duration = row["反馈结束时刻s"] - row["反馈翻屏时刻s"]
+        assert 0.075 <= feedback_duration < 0.250
+        with (Path(directory) / "intervals.csv").open(encoding="utf-8-sig", newline="") as stream:
+            saved = list(csv.DictReader(stream))[-1]
+        assert saved["反馈中断"] == "1"
+        assert saved["反馈结束时刻s"] == f"{row['反馈结束时刻s']:.6f}"
+        meta = json.loads((Path(directory) / "meta.json").read_text(encoding="utf-8"))
+        assert meta["实测刷新率Hz"] == exp.refresh_hz
+        assert meta["出题估计帧长s"] == exp.frame_period
+    print(
+        f"UI input and feedback interruption checks passed. "
+        f"Esc ended feedback after {1000 * feedback_duration:.1f} ms. "
+        f"Measured refresh rate: {exp.refresh_hz!r} Hz."
+    )
 
 def run_intervals(args):
     if args.studio:
@@ -114,6 +203,7 @@ def run_intervals(args):
         clock = task.logging.defaultClock
         window = SimpleNamespace(
             flip=clock.flip, monitorFramePeriod=clock.frame_period,
+            getActualFrameRate=lambda **_: 1 / clock.frame_period,
             setMouseVisible=lambda _visible: None, close=lambda: None,
         )
         virtual_visual = SimpleNamespace(
@@ -153,7 +243,13 @@ def run_intervals(args):
             first_on = timestamp
             end = first_on + duration
         color = tuple(float(channel) for channel in exp.word.color)
-        key = color_keys[color]
+        key = next(
+            (key for rgb, key in color_keys.items()
+             if len(color) == len(rgb) and all(math.isclose(a, b, abs_tol=1e-5) for a, b in zip(color, rgb))),
+            None,
+        )
+        if key is None:
+            raise AssertionError(f"Unexpected stimulus color {color!r}")
         if scenario == "normal" and timestamp + 0.27 < end:
             exp.keyboard.queue(key, timestamp + 0.27)
         elif target_count == 1:
@@ -197,7 +293,7 @@ def run_intervals(args):
                 assert interval["区段开始时刻s"] == first_on
                 assert interval["区段截止时刻s"] == end
                 assert math.isclose(end - first_on, duration, abs_tol=1e-9)
-                tolerance = max(2 * window.monitorFramePeriod, 0.025)
+                tolerance = max(2 * exp.frame_period, 0.025)
                 within_tolerance = (
                     -1e-9 <= feedback_delay <= tolerance
                     and task.CFG["FB_DUR"] - 1e-9 <= feedback_duration <= task.CFG["FB_DUR"] + tolerance
@@ -231,6 +327,12 @@ def run_intervals(args):
                     "within_flip_tolerance": within_tolerance,
                     "trials": len(trials), "points": interval["区段得分"],
                 })
+        window.flip = real_flip
+        exp.word.draw = real_draw
+        exp._fb_interval = real_feedback
+        text_stim = task.visual.TextStim if args.studio else VirtualStim
+        with patch.object(task.visual, "TextStim", text_stim):
+            check_interface_keys(exp)
     finally:
         window.close()
 
@@ -243,6 +345,8 @@ def main():
     parser.add_argument("--fullscreen", action="store_true", help="Use the full-screen acquisition mode.")
     parser.add_argument("--isi", type=float, default=0.25, help="Blank interval in seconds.")
     args = parser.parse_args()
+    if not __debug__:
+        parser.error("Run without Python optimization so timing assertions remain enabled")
     if args.fullscreen and not args.studio:
         parser.error("--fullscreen requires --studio")
     if not math.isfinite(args.isi) or args.isi < 0:

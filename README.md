@@ -4,7 +4,7 @@
 
 ## 在 PsychoPy Studio 运行
 
-在 PsychoPy Studio 打开 **Coder**，打开仓库根目录的 [stroop_efficacy_learning.py](stroop_efficacy_learning.py)，点击 **Run**。脚本使用 Studio 的 PsychoPy 环境。被试信息确认后按空格开始，任务中可按 Esc 退出并保存已有记录。
+在 PsychoPy Studio 打开 **Coder**，打开仓库根目录的 [stroop_efficacy_learning.py](stroop_efficacy_learning.py)，点击 **Run**。启动时先检查 Studio 的 Psychtoolbox 键盘后端，然后进入被试登记。被试信息确认后按空格开始，任务中可按 Esc 退出并保存已有记录。
 
 - **快跑**　将脚本顶部 `CFG` 中的 `DEBUG_FAST` 改为 `True`，以窗口模式运行 12 个区段，作答窗口缩短为 1 秒。适用于检查按键、反馈、探测与导出。
 - **完整流程**　保持 `DEBUG_FAST=False` 和 `SKIP_PRACTICE=False`。以全屏运行三段练习和 288 个正式区段。当前合并版用于开发验证，采集版本将在[路线图](https://gitee.com/evclab/stroop-efficacy-learning/issues/IKY26F)中的验收完成后锁定。
@@ -26,7 +26,7 @@
 
 ## 计时核对
 
-区段从首个目标翻屏开始计时。按键有效时段从本题翻屏起，到固定区段截止时刻前。反应时由 PsychoPy Studio 的 Psychtoolbox 按键时间戳减去目标翻屏时间得到。反馈在截止后翻屏，以实际反馈翻屏为起点计时约 1.5 秒。记录中的实际时间可用于核查迟帧。
+区段从首个目标翻屏开始计时。按键有效时段从本题翻屏起，到固定区段截止时刻前。反应时由 PsychoPy Studio 的 Psychtoolbox 按键时间戳减去目标翻屏时间得到。反馈在截止后翻屏，以实际反馈翻屏为起点计时约 1.5 秒。键盘交互统一使用 PTB，反馈期间按 Esc 会结束本场并保存已显示的反馈及中断标记。记录中的实际时间和会话实测刷新率可用于核查迟帧。刷新率实测未得到稳定值时，meta.json 会保留用于出题判断的默认帧长，实测刷新率字段记为空值。
 
 在 PsychoPy Studio 的 Python 环境下，从仓库根目录运行：
 
@@ -34,10 +34,10 @@
 python tests/check_timing.py --studio
 ```
 
-脚本在 2、3、4 秒区段验证正常作答、截止前、截止时、截止后和未答。它开启真实窗口并使用模拟按键，以软件时间戳核对计时。可加 `--fullscreen` 复测正式全屏。可用 `--isi 0.15` 对照旧版的题间空屏。
+脚本在 2、3、4 秒区段验证正常作答、截止前、截止时、截止后和未答。它还覆盖确认页、说明页、探测按键和反馈中断。真实窗口测试使用模拟按键，以软件时间戳核对计时。可加 `--fullscreen` 复测正式全屏。可用 `--isi 0.15` 对照旧版的题间空屏。
 
 ## 输出与版本
 
-输出写到脚本旁的 `data/`，包括单题 `trials.csv`、区段 `intervals.csv`、探测 `probes.csv` 和会话信息 `meta.json`。单题表的 `词` 与 `墨色` 记录实际刺激，`反应时` 以秒为单位。区段表记录注视点、区段起止和反馈起止的翻屏时间或计划截止时间。它们同单题的目标与按键时间共用 PsychoPy 日志时钟。会话信息记录 Git 提交、脚本 SHA-256、运行参数和正式任务的字色 × 字义计数。分别统计已呈现和有按键的刺激。数据目录已被 Git 忽略。
+输出写到脚本旁的 `data/`，包括单题 `trials.csv`、区段 `intervals.csv`、探测 `probes.csv` 和会话信息 `meta.json`。单题表的 `词` 与 `墨色` 记录实际刺激，`反应时` 以秒为单位。区段表记录注视点、区段起止和反馈起止的翻屏时间或计划截止时间。它们同单题的目标与按键时间共用 PsychoPy 日志时钟，绝对时间戳在 CSV 以秒保留六位小数。会话信息记录 Git 提交、脚本 SHA-256、运行参数和正式任务的字色 × 字义计数。分别统计已呈现和有按键的刺激。数据目录已被 Git 忽略。
 
 迁入的研究一色词版本可从 [`v1.2`](https://gitee.com/evclab/stroop-efficacy-learning/tree/v1.2) 查阅。研究二水果版和原说明见 [`exp2-v1.0`](https://gitee.com/evclab/stroop-efficacy-learning/tree/exp2-v1.0)。
