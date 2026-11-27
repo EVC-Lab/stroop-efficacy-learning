@@ -642,7 +642,15 @@ def run_intervals(args):
         check_interval_interruptions(exp)
         check_failed_save(exp)
         if not args.studio:
-            check_formal_protocol(exp, color_keys)
+            formal_settings = {
+                "DEBUG_FAST": False,
+                "N_INTERVALS": 288,
+                "BREAK_EVERY": 36,
+                "WINDOW_CHOICES": (2.0, 3.0, 4.0),
+                "FB_DUR": 1.5,
+            }
+            with patch.dict(task.CFG, formal_settings):
+                check_formal_protocol(exp, color_keys)
     finally:
         window.close()
 
