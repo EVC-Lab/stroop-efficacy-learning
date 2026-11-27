@@ -15,7 +15,7 @@ from pathlib import Path
 from psychopy import visual, core, event, gui
 from psychopy import logging as psylog
 
-from stroop_efficacy.design import CFG, YokeWindow, make_probe_schedule, make_score_schedule, make_trajectory
+from stroop_efficacy.design import CFG, YokeWindow, make_main_schedule
 from stroop_efficacy.session_data import code_version, stimulus_counts, write_snapshot
 from stroop_efficacy.timing import TimedInput, open_timed_keyboard, resolve_frame_timing
 
@@ -49,10 +49,6 @@ class StroopEfficacyExp:
         self.outdir = None
         self.update_info(info)
         self.code_commit, self.script_hash, self.module_hashes = code_version(__file__)
-
-        self.rng = random.Random()
-        self.traj_seed = CFG["TRAJ_SEED"]
-        self.rng.seed("%s-%s" % (self.subj, self.group))   # 每个被试可复现
 
         keyboard = open_timed_keyboard() if keyboard is None else keyboard
         self.timed_input = TimedInput(keyboard)
@@ -109,7 +105,7 @@ class StroopEfficacyExp:
 
     # -------------------------------------------------------------- 被试信息
     def update_info(self, info):
-        """登记/更新被试信息（姓名、编号、漂移方向）。"""
+        """更新登记信息和依参与者编号固定的随机数流。"""
         self.info = info
         self.name = str(info.get("姓名", "")).strip() or "匿名"
         self.subj = str(info.get("被试编号", "")).strip() or auto_subject_id()
@@ -117,15 +113,19 @@ class StroopEfficacyExp:
 
         if direction.startswith("自动"):
             digits = re.findall(r"\d", self.subj)
-            self.reverse = (int(digits[-1]) % 2 == 0) if digits else False
+            performance_first = bool(digits) and int(digits[-1]) % 2 == 0
         else:
-            self.reverse = (direction == "反向")
-        self.group = "反向" if self.reverse else "正向"
+            performance_first = direction == "反向"
+        self.group = "反向" if performance_first else "正向"
+        seed = f"{self.subj}-{self.group}"
+        self.rng = random.Random(seed)
+        self.score_rng = random.Random(f"{seed}:score")
+        self.main_schedule = make_main_schedule(performance_first, random.Random(f"{seed}:probes"))
 
     def info_text(self):
-        return ("姓名：%s\n编号：%s\n年龄：%s    性别：%s\n漂移方向：%s"
+        return ("姓名：%s\n编号：%s\n年龄：%s    性别：%s\n效能序列：%s（%s）"
                 % (self.name, self.subj, self.info.get("年龄", ""),
-                   self.info.get("性别", ""), self.group))
+                   self.info.get("性别", ""), self.main_schedule.sequence, self.group))
 
     def confirm_info(self):
         """开跑前的信息确认屏：按 R 可重新填写，按空格确认。"""
@@ -171,7 +171,7 @@ class StroopEfficacyExp:
             平均每区段试次数=(round(statistics.mean([r["试次数"] for r in scored_rows]), 2)
                               if scored_rows else ""),
             yoking窗口均值=round(self.yoke.mean(), 2),
-            轨迹种子=self.traj_seed, 效能下限=CFG["P_MIN"], 效能上限=CFG["P_MAX"],
+            正式调度=self.main_schedule.metadata(),
             每对一次得分=CFG["POINT_PER_CORRECT"], 窗口长度选项=list(CFG["WINDOW_CHOICES"]),
             正式刺激呈现计数=stimulus_counts(main_trials, inks, words),
             正式刺激作答计数=stimulus_counts((r for r in main_trials if r["反应键"]), inks, words),
@@ -263,7 +263,7 @@ class StroopEfficacyExp:
         return float(self.win.flip())
 
     # ------------------------------------------------------------------ 区段
-    def run_interval(self, idx, window, eff_type, p_eff=None, phase="main", practice_yoke=None):
+    def run_interval(self, idx, window, eff_type, phase="main", practice_yoke=None):
         """跑一个区段：注视点 → 自由作答窗口 → 反馈（2.2）。"""
         self.fix.draw()
         fixation_on = float(self.win.flip())
@@ -334,7 +334,7 @@ class StroopEfficacyExp:
                 score = float(n_correct * CFG["POINT_PER_CORRECT"])
                 source = "表现"
             else:
-                score = history.sample(self.rng)
+                score = history.sample(self.rng if practice else self.score_rng)
                 source = "抽取"
             feedback_on, feedback_off, escape_at = self._fb_interval(score, eff_type, deadline, practice=practice)
             if escape_at is not None:
@@ -371,7 +371,7 @@ class StroopEfficacyExp:
             试次数=n_done, 正确数=n_correct,
             正确率=(round(n_correct / float(n_evaluable), 3) if n_evaluable else ""),
             一致比例=(round(n_congruent / float(n_done), 3) if n_done else ""),
-            效能概率=("" if p_eff is None else round(float(p_eff), 4)),
+            效能概率="",
             效能类型=eff_type,
             得分来源=(source if score_awarded else ""),
             区段得分=(round(score, 2) if score_awarded else ""),
@@ -539,6 +539,8 @@ class StroopEfficacyExp:
 
     # ------------------------------------------------------------------ 正式任务
     def run_main(self):
+        schedule = self.main_schedule
+        n = len(schedule.windows)
         self.wait_space(
             "正式任务开始\n\n"
             "请按字的颜色选键，忽略字义。红 → D，绿 → F，蓝 → J，黄 → K。\n"
@@ -546,22 +548,14 @@ class StroopEfficacyExp:
             "有的区段按表现计分，每答对一题得 %d 分；有的区段由系统随机给分。\n"
             "作答时请兼顾速度和准确性。任务中会偶尔出现滑块问题，请按当下的判断作答。\n\n"
             "共 %d 个区段。按空格开始。"
-            % (CFG["POINT_PER_CORRECT"], CFG["N_INTERVALS"]), height=0.036)
+            % (CFG["POINT_PER_CORRECT"], n), height=0.036)
 
-        n = CFG["N_INTERVALS"]
-        p_traj = make_trajectory(n, CFG["P_MIN"], CFG["P_MAX"], self.traj_seed,
-                                 reverse=self.reverse, smooth_frac=CFG["TRAJ_SMOOTH"])
-        windows = make_score_schedule(n, self.rng)
-        probes = make_probe_schedule(n, CFG["PROBE_EVERY"], self.rng)
-
-        for i in range(n):
+        for i, window in enumerate(schedule.windows):
             if CFG["BREAK_EVERY"] and i > 0 and i % CFG["BREAK_EVERY"] == 0:
                 self.show_break(i, n)
-            p = float(p_traj[i])
-            eff_type = "performance" if self.rng.random() < p else "random"
-            self.run_interval(i, windows[i], eff_type=eff_type, p_eff=p, phase="main")
-            if i in probes:
-                self.run_probe(probes[i], after_interval=i)
+            self.run_interval(i, window, eff_type=schedule.sources[i])
+            if i in schedule.probes:
+                self.run_probe(schedule.probes[i], after_interval=i)
             if i % 10 == 0:                    # 每 10 区段落盘一次，防崩溃丢数据
                 self.save()
 
@@ -596,8 +590,8 @@ def auto_subject_id():
 def ask_info(prev=None):
     """实验前的被试信息登记表（Qt 对话框，支持中文输入法直接打姓名）。
 
-    “漂移方向”选“自动”时按编号末位奇偶分配（奇数→正向，偶数→反向），
-    这样单双号被试自然对半，不用手工平衡。
+    “漂移方向”选“自动”时按编号最后一个数字分配。奇数或无数字用
+    A（正向），偶数用逐段互补的 B（反向）。
     """
     prev = prev or {}
     dlg = gui.DlgFromDict(
