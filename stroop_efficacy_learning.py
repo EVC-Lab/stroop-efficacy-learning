@@ -11,12 +11,15 @@ import statistics
 from datetime import datetime
 from math import isfinite
 from pathlib import Path
+from uuid import uuid4
 
 from psychopy import visual, core, event, gui
 from psychopy import logging as psylog
 
 from stroop_efficacy.design import CFG, YokeWindow, make_main_schedule
-from stroop_efficacy.session_data import code_version, stimulus_counts, write_snapshot
+from stroop_efficacy.session_data import (
+    EXPORT_VERSION, code_version, parameter_hash, stimulus_counts, trial_response_fields, write_snapshot,
+)
 from stroop_efficacy.timing import TimedInput, open_timed_keyboard, resolve_frame_timing
 
 try:  # 老接口优先：event.Mouse 方法齐全（getPressed / getPos），新版 PsychoPy 仍提供
@@ -47,6 +50,7 @@ def mouse_left_pressed(mouse):
 class StroopEfficacyExp:
     def __init__(self, info, keyboard=None):
         self.outdir = None
+        self.session_id = uuid4().hex
         self.update_info(info)
         self.code_commit, self.script_hash, self.module_hashes = code_version(__file__)
 
@@ -149,8 +153,8 @@ class StroopEfficacyExp:
         base = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd()
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe = re.sub(r'[\\/:*?"<>|\s]+', "", "%s_%s" % (self.subj, self.name))
-        d = os.path.join(base, "data", "%s_%s" % (safe, stamp))
-        os.makedirs(d, exist_ok=True)
+        d = os.path.join(base, "data", f"{safe}_{stamp}_{self.session_id}")
+        os.makedirs(d, exist_ok=False)
         return d
 
     def save(self, verbose=False):
@@ -163,9 +167,11 @@ class StroopEfficacyExp:
         inks = tuple(CFG["KEYS"])
         words = tuple(CFG["WORD"].values())
         meta = dict(
+            会话编号=self.session_id, 导出版本=EXPORT_VERSION, RT单位="s", 参数SHA256=parameter_hash(CFG),
             姓名=self.name, 被试编号=self.subj, 年龄=self.info.get("年龄", ""),
             性别=self.info.get("性别", ""), 漂移方向=self.group,
             区段数=len(scored_rows), 中断区段数=sum(bool(r["中断阶段"]) for r in main_rows),
+            完整区段数=sum(r["区段状态"] == "completed" for r in main_rows),
             总分=round(self.total_score, 1),
             平均每区段得分=(round(statistics.mean(scores), 2) if scores else ""),
             平均每区段试次数=(round(statistics.mean([r["试次数"] for r in scored_rows]), 2)
@@ -265,6 +271,8 @@ class StroopEfficacyExp:
     # ------------------------------------------------------------------ 区段
     def run_interval(self, idx, window, eff_type, phase="main", practice_yoke=None):
         """跑一个区段：注视点 → 自由作答窗口 → 反馈（2.2）。"""
+        interval_number = "" if idx is None else idx + 1
+        block = self.main_schedule.block_number(idx) if phase == "main" and idx is not None else ""
         self.fix.draw()
         fixation_on = float(self.win.flip())
         escape_at = self.timed_input.wait_until_or_escape(fixation_on + self.rng.choice(CFG["FIX_CHOICES"]))
@@ -272,6 +280,7 @@ class StroopEfficacyExp:
 
         interval_start = deadline = None
         n_done = 0
+        n_answered = 0
         n_correct = 0
         n_congruent = 0
         interrupted_trial = False
@@ -283,26 +292,24 @@ class StroopEfficacyExp:
                 interval_start = onset
                 deadline = interval_start + window
             response, pressed_at, escape_at = self.timed_input.wait_for_response(self.response_keys, onset, deadline)
-            rt = None if pressed_at is None else pressed_at - onset
             interrupted_trial = escape_at is not None and not response and escape_at < deadline
 
             correct_key = CFG["KEYS"][ink]
             correct = int(response == correct_key)
             n_done += 1
+            n_answered += int(bool(response))
             n_correct += correct
             n_congruent += int(condition == "congruent")
             self.rows_trials.append(dict(
                 被试=self.subj, 组别=self.group, 阶段=phase,
-                区段=("" if idx is None else idx + 1),
+                会话编号=self.session_id, 组块=block, 试次编号=len(self.rows_trials) + 1, 区段=interval_number,
                 区段内序号=n_done, 窗口s=window,
                 区段内开始时刻s=round(onset - interval_start, 4),
                 目标翻屏时刻s=onset, 作答截止时刻s=deadline,
-                按键时刻s=("" if pressed_at is None else pressed_at),
                 条件=condition, 词=word, 墨色=ink,
-                正确键=correct_key, 反应键=response,
+                正确键=correct_key,
                 正确=("" if interrupted_trial else correct), 试次中断=int(interrupted_trial),
-                反应时=("" if rt is None else round(rt, 4)),
-                过快=int(rt is not None and rt < 0.25),  # DDM 分析的过快标记
+                **trial_response_fields(response, pressed_at, onset, deadline, interrupted_trial),
             ))
             if escape_at is not None:
                 interrupt_stage = "作答中"
@@ -360,15 +367,17 @@ class StroopEfficacyExp:
         n_evaluable = n_done - int(interrupted_trial)
         row = dict(
             被试=self.subj, 组别=self.group, 阶段=phase,
-            区段=("" if idx is None else idx + 1),
+            会话编号=self.session_id, 组块=block, 区段=interval_number,
             窗口s=window, 作答窗用时s=elapsed,
             注视翻屏时刻s=fixation_on, 区段开始时刻s=interval_start, 区段截止时刻s=deadline,
             反馈翻屏时刻s=feedback_on, 反馈结束时刻s=feedback_off,
             反馈延迟s=(round(feedback_on - deadline, 6) if feedback_shown else ""),
             反馈时长s=(round(feedback_off - feedback_on, 6) if feedback_shown else ""),
             中断阶段=interrupt_stage, 中断时刻s=escape_at,
+            区段状态=("interrupted" if interrupt_stage else "completed"),
             反馈中断=int(interrupt_stage == "反馈中"),
-            试次数=n_done, 正确数=n_correct,
+            试次数=n_done, 作答数=n_answered, 正确数=n_correct,
+            截止未答数=n_evaluable - n_answered,
             正确率=(round(n_correct / float(n_evaluable), 3) if n_evaluable else ""),
             一致比例=(round(n_congruent / float(n_done), 3) if n_done else ""),
             效能概率="",
@@ -385,6 +394,8 @@ class StroopEfficacyExp:
 
     # ------------------------------------------------------------------ 主观探针
     def run_probe(self, kind, after_interval):
+        interval_number = "" if after_interval is None else after_interval + 1
+        block = self.main_schedule.block_number(after_interval) if after_interval is not None else ""
         if kind == "efficacy":
             q = "你认为你当前的得分在多大程度上取决于你的表现？"
             lab_l, lab_r = "完全不由表现决定", "完全由表现决定"
@@ -440,7 +451,8 @@ class StroopEfficacyExp:
         core.wait(0.2)
         self.rows_probes.append(dict(
             被试=self.subj, 组别=self.group, 探针类型=kind,
-            插入位置=("" if after_interval is None else after_interval + 1),
+            会话编号=self.session_id, 阶段="main", 组块=block, 区段=interval_number,
+            探测编号=len(self.rows_probes) + 1, 插入位置=interval_number,
             评价值=round(value, 2), 用时s=round(core.getTime() - t0, 3),
             累计得分=round(self.total_score, 2),
         ))
@@ -456,22 +468,20 @@ class StroopEfficacyExp:
         onset = self._present_target(ink, word)
         deadline = onset + timeout
         resp_key, pressed_at, escape_at = self.timed_input.wait_for_response(self.response_keys, onset, deadline)
-        rt = None if pressed_at is None else pressed_at - onset
         ok = int(resp_key == CFG["KEYS"][ink])
         interrupted = escape_at is not None and not resp_key and escape_at < deadline
 
         self.rows_trials.append(dict(
             被试=self.subj, 组别=self.group, 阶段=phase,
+            会话编号=self.session_id, 组块="", 试次编号=len(self.rows_trials) + 1,
             区段="", 区段内序号="", 窗口s=timeout, 区段内开始时刻s="",
             目标翻屏时刻s=onset, 作答截止时刻s=deadline,
-            按键时刻s=("" if pressed_at is None else pressed_at),
             条件=("mapping" if not word else ("congruent" if word == CFG["WORD"][ink]
                                               else "incongruent")),
             词=word or "色块", 墨色=ink,
-            正确键=CFG["KEYS"][ink], 反应键=resp_key,
+            正确键=CFG["KEYS"][ink],
             正确=("" if interrupted else ok), 试次中断=int(interrupted),
-            反应时=("" if rt is None else round(rt, 4)),
-            过快=int(rt is not None and rt < 0.25),
+            **trial_response_fields(resp_key, pressed_at, onset, deadline, interrupted),
         ))
         if escape_at is not None:
             self.abort()

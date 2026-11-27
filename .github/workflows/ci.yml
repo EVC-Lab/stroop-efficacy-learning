@@ -47,3 +47,6 @@ jobs:
 
       - name: Test virtual timing (150 ms ISI)
         run: python tests/check_timing.py --isi 0.15
+
+      - name: Verify synthetic behavior exports and joins
+        run: python tests/check_behavior_export.py

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from collections import deque
 from dataclasses import dataclass
 from itertools import accumulate
@@ -87,6 +88,12 @@ class MainSchedule:
     sources: tuple[str, ...]
     probes: dict[int, str]
     block_ends: tuple[int, ...]
+
+    def block_number(self, interval_index):
+        """返回正式调度中从 1 起算的组块编号。"""
+        if not 0 <= interval_index < len(self.windows):
+            raise ValueError("区段下标超出正式调度。")
+        return bisect_right(self.block_ends, interval_index) + 1
 
     def metadata(self):
         """保留开跑前的完整调度，区段位置以 1 为起点。"""

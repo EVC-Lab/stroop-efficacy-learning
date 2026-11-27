@@ -346,7 +346,7 @@ def check_interval_interruptions(exp):
                   patch.object(task.core, "quit", side_effect=SystemExit),
                   patch.dict(task.CFG, {"ISI_BETWEEN": 0.25})):
                 try:
-                    exp.run_interval(900 + index, duration, "performance")
+                    exp.run_interval(36 + index, duration, "performance")
                 except SystemExit:
                     close.assert_called_once()
                 else:
@@ -642,15 +642,7 @@ def run_intervals(args):
         check_interval_interruptions(exp)
         check_failed_save(exp)
         if not args.studio:
-            formal_settings = {
-                "DEBUG_FAST": False,
-                "N_INTERVALS": 288,
-                "BREAK_EVERY": 36,
-                "WINDOW_CHOICES": (2.0, 3.0, 4.0),
-                "FB_DUR": 1.5,
-            }
-            with patch.dict(task.CFG, formal_settings):
-                check_formal_protocol(exp, color_keys)
+            check_formal_protocol(exp, color_keys)
     finally:
         window.close()
 
@@ -680,7 +672,12 @@ def main():
     check_feedback_deadline()
     check_refresh_rate()
 
-    settings = {"FULLSCR": args.fullscreen, "FIX_CHOICES": (0.08,), "ISI_BETWEEN": args.isi}
+    # 区段编号及组块检查使用正式调度。临时覆盖实验员保存的快跑设置。
+    settings = {
+        "DEBUG_FAST": False, "N_INTERVALS": 288, "BREAK_EVERY": 36,
+        "WINDOW_CHOICES": (2.0, 3.0, 4.0), "FB_DUR": 1.5,
+        "FULLSCR": args.fullscreen, "FIX_CHOICES": (0.08,), "ISI_BETWEEN": args.isi,
+    }
     with patch.dict(task.CFG, settings):
         if args.studio:
             results = run_intervals(args)
