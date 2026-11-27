@@ -338,10 +338,15 @@ class StroopEfficacyExp:
                 source = "抽取"
             feedback_on, feedback_off, escape_at = self._fb_interval(score, eff_type, deadline, practice=practice)
             if escape_at is not None:
-                interrupt_stage = "反馈前" if feedback_on is None else "反馈中"
+                if feedback_on is None or escape_at < feedback_on:
+                    interrupt_stage = "反馈前"
+                else:
+                    interrupt_stage = "反馈中"
 
         feedback_shown = feedback_on is not None
-        if feedback_shown:
+        # 保留已经发生的反馈翻屏记录，按 Esc 的实际时刻决定积分是否结算。
+        score_awarded = feedback_shown and interrupt_stage != "反馈前"
+        if score_awarded:
             if eff_type == "performance":
                 history.add(score)
             if not practice:
@@ -368,8 +373,8 @@ class StroopEfficacyExp:
             一致比例=(round(n_congruent / float(n_done), 3) if n_done else ""),
             效能概率=("" if p_eff is None else round(float(p_eff), 4)),
             效能类型=eff_type,
-            得分来源=(source if feedback_shown else ""),
-            区段得分=(round(score, 2) if feedback_shown else ""),
+            得分来源=(source if score_awarded else ""),
+            区段得分=(round(score, 2) if score_awarded else ""),
             累计得分=round(self.total_score, 2),
         )
         self.rows_intervals.append(row)

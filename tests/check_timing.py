@@ -181,8 +181,16 @@ def check_interval_interruptions(exp):
     original_draw = exp.fb_source.draw
     original_target = exp._present_target
 
-    stages = ("注视中", "作答中", "题间空屏", "反馈前", "反馈中")
-    for index, stage in enumerate(stages):
+    cases = (
+        ("注视中", "注视中"),
+        ("作答中", "作答中"),
+        ("题间空屏", "题间空屏"),
+        ("反馈前", "反馈前"),
+        ("翻屏前按下但翻屏后读取", "反馈前"),
+        ("反馈翻屏时按下", "反馈中"),
+        ("反馈中", "反馈中"),
+    )
+    for index, (case, stage) in enumerate(cases):
         n_flips = 0
         n_targets = 0
         pending_feedback = False
@@ -200,20 +208,28 @@ def check_interval_interruptions(exp):
         def feedback_draw():
             nonlocal pending_feedback
             original_draw()
-            if stage == "反馈中":
+            if case in ("翻屏前按下但翻屏后读取", "反馈翻屏时按下", "反馈中"):
                 pending_feedback = True
-            elif stage == "反馈前":
+            elif case == "反馈前":
                 stop_at = float(task.psylog.defaultClock.getTime()) + 0.075
                 exp.timed_input.keyboard.queue("escape", stop_at, released=True)
 
         def flip():
             nonlocal n_flips, pending_feedback
+            before_flip = task.psylog.defaultClock.getTime()
             timestamp = float(original_flip())
             n_flips += 1
-            if pending_feedback or (stage == "注视中" and n_flips == 1) or (stage == "题间空屏" and n_flips == 3):
+            if pending_feedback:
+                stop_at = timestamp
+                if case == "翻屏前按下但翻屏后读取":
+                    stop_at = (before_flip + timestamp) / 2
+                elif case == "反馈中":
+                    stop_at += 0.075
+                exp.timed_input.keyboard.queue("escape", stop_at, available_at=max(stop_at, timestamp), released=True)
+                pending_feedback = False
+            elif (stage == "注视中" and n_flips == 1) or (stage == "题间空屏" and n_flips == 3):
                 stop_delay = 0.025 if stage == "注视中" else 0.075
                 exp.timed_input.keyboard.queue("escape", timestamp + stop_delay, released=True)
-                pending_feedback = False
             return timestamp
 
         before_total = exp.total_score
@@ -237,7 +253,7 @@ def check_interval_interruptions(exp):
                 except SystemExit:
                     close.assert_called_once()
                 else:
-                    raise AssertionError(f"Esc did not interrupt during {stage}")
+                    raise AssertionError(f"Esc did not interrupt during {case}")
 
             assert len(exp.rows_intervals) == before_intervals + 1
             row = exp.rows_intervals[-1]
@@ -249,7 +265,7 @@ def check_interval_interruptions(exp):
             meta = json.loads((Path(directory) / "meta.json").read_text(encoding="utf-8"))
             assert len(trials) == before_trials + row["试次数"]
             assert all(r["区段"] == saved["区段"] for r in trials[before_trials:])
-            assert saved["中断阶段"] == stage
+            assert saved["中断阶段"] == stage, (case, saved["中断阶段"])
             assert float(saved["中断时刻s"]) >= float(saved["注视翻屏时刻s"])
             assert row["反馈中断"] == int(stage == "反馈中")
             assert meta["实测刷新率Hz"] == exp.refresh_hz
@@ -271,17 +287,27 @@ def check_interval_interruptions(exp):
                 assert trials[-1]["试次中断"] == "1"
                 assert trials[-1]["正确"] == trials[-1]["按键时刻s"] == ""
             if stage == "反馈中":
-                assert 0.075 <= row["反馈时长s"] < 0.250
+                minimum_display = 0 if case == "反馈翻屏时按下" else 0.075
+                assert minimum_display <= row["反馈时长s"] < 0.250
                 assert row["反馈延迟s"] >= 0
                 assert saved["反馈结束时刻s"] == f"{row['反馈结束时刻s']:.6f}"
                 assert row["作答窗用时s"] == duration
                 assert exp.total_score == before_total + 10
                 assert exp.yoke.buf[-1] == 10
+                if case == "反馈翻屏时按下":
+                    assert row["中断时刻s"] == row["反馈翻屏时刻s"]
             else:
-                assert saved["反馈翻屏时刻s"] == saved["区段得分"] == ""
+                assert saved["区段得分"] == saved["得分来源"] == ""
                 assert exp.total_score == before_total
                 assert list(exp.yoke.buf) == before_history
-    print("UI input, both mouse APIs, and abort saving in all five interval stages passed.")
+                if case == "翻屏前按下但翻屏后读取":
+                    assert row["区段截止时刻s"] <= row["中断时刻s"] < row["反馈翻屏时刻s"]
+                    assert row["反馈结束时刻s"] > row["反馈翻屏时刻s"]
+                    assert 0 < float(saved["反馈时长s"]) < 0.250
+                    assert saved["反馈翻屏时刻s"] == f"{row['反馈翻屏时刻s']:.6f}"
+                else:
+                    assert saved["反馈翻屏时刻s"] == ""
+    print("UI input, both mouse APIs, and seven abort scenarios including the feedback flip boundary passed.")
 
 
 def check_failed_save(exp):
