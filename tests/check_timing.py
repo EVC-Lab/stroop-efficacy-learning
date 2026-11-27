@@ -8,9 +8,12 @@ flip times come from PsychoPy; the test does not measure physical display latenc
 
 import argparse
 import csv
+import hashlib
 import json
 import math
+import random
 import sys
+from collections import Counter, deque
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -140,6 +143,97 @@ def check_refresh_rate():
     for measured in (None, 0.0, 1.0, 5000.0, math.nan, math.inf):
         assert task.resolve_frame_timing(measured, 1 / 144) == (None, 1 / 144)
     assert task.resolve_frame_timing(math.nan, math.inf) == (None, 1 / 60)
+
+
+def check_formal_protocol(exp, color_keys):
+    """Run the real main loop twice with different response speeds using virtual flips."""
+    subject = "QA-PROTOCOL-1"
+    info = {"被试编号": subject, "漂移方向": "自动"}
+    exp.update_info(info)
+    schedule = exp.main_schedule
+    exp.update_info({**info, "被试编号": "QA-PROTOCOL-2"})
+    complement = exp.main_schedule
+    assert (schedule.sequence, complement.sequence) == ("A", "B")
+    assert schedule.windows == complement.windows == (2, 2, 3, 3, 4, 4) * 48
+    assert schedule.block_ends == tuple(range(36, 289, 36))
+    assert schedule.sources.count("performance") == 141
+    assert complement.sources.count("performance") == 147
+    assert all(a != b for a, b in zip(schedule.sources, complement.sources, strict=True))
+    flags = "".join("1" if kind == "performance" else "0" for kind in schedule.sources)
+    assert hashlib.sha256(flags.encode("ascii")).hexdigest() == (
+        "4006f94d929cf76972a0874d0a98c4204c3911a9231da80dacbde69b900d8499"
+    )
+    for planned in (schedule, complement):
+        positions = [0, *(i + 1 for i in planned.probes)]
+        assert positions[-1] == 288
+        assert Counter(b - a for a, b in zip(positions, positions[1:])) == {3: 24, 4: 24, 5: 24}
+        kinds = list(planned.probes.values())
+        assert Counter(kinds) == {"efficacy": 36, "reward": 36}
+        assert all(a != b for a, b in zip(kinds, kinds[1:]))
+
+    with patch.dict(task.CFG, {"DEBUG_FAST": True, "N_INTERVALS": 12, "WINDOW_CHOICES": (1.0,)}):
+        exp.update_info(info)
+        fast = exp.main_schedule
+        assert fast.version.endswith("-fast")
+        assert fast.windows == (1.0,) * 12 and fast.sources == schedule.sources[:12]
+        assert fast.block_ends == (12,) and set(fast.probes.values()) == {"efficacy", "reward"}
+
+    early_scores, early_correct = [], []
+    for response_time in (0.3, 0.9):
+        exp.update_info(info)
+        assert exp.main_schedule == schedule
+        # Simulate a different amount of RNG work during practice and target generation.
+        for _ in range(int(response_time * 100)):
+            exp.rng.random()
+        exp.rows_trials, exp.rows_intervals, exp.rows_probes = [], [], []
+        exp.total_score = 0.0
+        exp.yoke = task.YokeWindow()
+        probe_events, breaks = [], []
+        clock = task.psylog.defaultClock
+
+        def respond(_keys, onset, deadline):
+            press = onset + response_time
+            clock.wait(min(press, deadline) - clock.getTime())
+            if press >= deadline:
+                return "", None, None
+            return color_keys[tuple(exp.word.color)], press, None
+
+        with (TemporaryDirectory() as outdir,
+              patch.object(exp, "outdir", outdir),
+              patch.object(exp, "wait_space"),
+              patch.object(exp, "show_break", side_effect=lambda done, _total: breaks.append(done)),
+              patch.object(exp, "run_probe",
+                           side_effect=lambda kind, after_interval: probe_events.append((after_interval, kind))),
+              patch.object(exp.timed_input, "wait_for_response", side_effect=respond)):
+            exp.run_main()
+            exp.save()
+            meta = json.loads((Path(outdir) / "meta.json").read_text(encoding="utf-8"))
+
+        assert breaks == list(schedule.block_ends[:-1])
+        assert probe_events == list(schedule.probes.items())
+        assert len(exp.rows_intervals) == 288
+        assert meta["区段数"] == 288
+        assert meta["正式调度"]["窗长s"] == list(schedule.windows)
+        assert meta["正式调度"]["计分来源"] == list(schedule.sources)
+        assert meta["正式调度"]["探测题"] == [{"区段": i + 1, "类型": k} for i, k in probe_events]
+        history = deque(task.CFG["YOKE_INIT_SCORES"], maxlen=10)
+        score_rng = random.Random(f"{subject}-正向:score")
+        cumulative = 0
+        for row, window, source in zip(exp.rows_intervals, schedule.windows, schedule.sources, strict=True):
+            assert row["窗口s"] == window and row["效能类型"] == source and row["效能概率"] == ""
+            if source == "performance":
+                expected_score = row["正确数"] * 10
+                history.append(expected_score)
+            else:
+                expected_score = score_rng.choice(list(history))
+            cumulative += expected_score
+            assert row["区段得分"] == expected_score and row["累计得分"] == cumulative
+        assert list(exp.yoke.buf) == list(history)
+        assert meta["总分"] == cumulative
+        early_scores.append([row["区段得分"] for row in exp.rows_intervals[:3]])
+        early_correct.append([row["正确数"] for row in exp.rows_intervals[:3]])
+    assert early_scores[0] == early_scores[1]
+    assert early_correct[0] != early_correct[1]
 
 
 def check_interface_keys(exp):
@@ -544,6 +638,8 @@ def run_intervals(args):
             check_interface_keys(exp)
         check_interval_interruptions(exp)
         check_failed_save(exp)
+        if not args.studio:
+            check_formal_protocol(exp, color_keys)
     finally:
         window.close()
 
