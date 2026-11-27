@@ -1,0 +1,7 @@
+# Review instructions
+
+- Cite the file and code path on the PR head. For a blocking finding, give a reproducible input or event sequence that reaches the failure through the current entry point. State the assumptions for any other finding.
+- Check task changes against [Grahek et al., Study 2](https://doi.org/10.1093/cercor/bhac215). A formal interval has a fixed 2, 3, or 4 second response window, with feedback shown after the deadline for about 1.5 seconds from its actual flip. The project sets the deadline at the first target flip, uses PTB key-down timestamps for RT and deadline checks, and distinguishes the minimum time to start a new target from the inter-trial interval.
+- Trace scoring and data together. Practice uses its own score history. In an interrupted interval, preserve displayed trials and their interval record. A trial cut short by Escape is marked as interrupted. Congruency proportion counts all displayed trials. Accuracy excludes interrupted trials and includes ordinary timeouts.
+- Use the Stroop CI results as evidence for virtual timing, input handling, and save behavior. The PsychoPy Studio fullscreen and physical-keyboard checks are the evidence for the collection setup. State which kind of evidence supports a timing claim.
+- Report actionable findings once. If a prior concern still applies, identify the current code path and explain what the earlier fix leaves reachable.

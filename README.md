@@ -4,10 +4,14 @@
 
 ## 在 PsychoPy Studio 运行
 
-在 PsychoPy Studio 打开 **Coder**，打开仓库根目录的 [stroop_efficacy_learning.py](stroop_efficacy_learning.py)，点击 **Run**。脚本使用 Studio 的 PsychoPy 环境。被试信息确认后按空格开始，任务中可按 Esc 退出并保存已有记录。
+在 PsychoPy Studio 打开 **Coder**，打开仓库根目录的 [stroop_efficacy_learning.py](stroop_efficacy_learning.py)，点击 **Run**。运行时将同目录的 `stroop_efficacy/` 与主脚本一起保留。启动时先检查 Studio 的 Psychtoolbox 键盘后端，然后进入被试登记。被试信息确认后按空格开始，任务中可按 Esc 退出并保存已有记录。
 
 - **快跑**　将脚本顶部 `CFG` 中的 `DEBUG_FAST` 改为 `True`，以窗口模式运行 12 个区段，作答窗口缩短为 1 秒。适用于检查按键、反馈、探测与导出。
 - **完整流程**　保持 `DEBUG_FAST=False` 和 `SKIP_PRACTICE=False`。以全屏运行三段练习和 288 个正式区段。当前合并版用于开发验证，采集版本将在[路线图](https://gitee.com/evclab/stroop-efficacy-learning/issues/IKY26F)中的验收完成后锁定。
+
+## 程序结构
+
+主脚本负责实验界面、作答与区段流程。[`design.py`](stroop_efficacy/design.py) 管理实验参数、窗长与效能调度和历史积分抽样。[`timing.py`](stroop_efficacy/timing.py) 管理 PTB 按键和截止判定。[`session_data.py`](stroop_efficacy/session_data.py) 负责保存会话文件和记录代码摘要。
 
 ## 作答流程
 
@@ -22,10 +26,30 @@
 - 本项目沿用论文的 288 个区段、2/3/4 秒作答窗、1/1.5/2 秒注视点、1.5 秒反馈、每次正确作答 10 分和最近 10 个表现区段的积分匹配。刺激采用研究一的四色色词，计分来源用文字呈现。研究二将积分与奖金挂钩，本项目的积分兑现规则在采集方案中确定。正文见 [Study 2 — Experimental design](https://doi.org/10.1093/cercor/bhac215)。
 - 作者公开日志中，84 个可按原始区段编号重建的完整会话使用同一套窗长顺序，2、3、4 秒各 96 段。有图词记录的题目中，一致刺激约占 47%，被试间比例有波动。本项目从三种窗长各取 96 段后按被试打乱，正式色词按 0.5 概率独立抽取一致性，记录实际配比供核查。[作者公开日志](https://github.com/igrahek/LFXC_EEG_2022/tree/eaebcb7a348109f20606a87f2210d3bb59bc7bf7/Data/Experiment2)
 - 正文写每隔 2–4 个区段探测一次。公开日志中每人记录 72 次有效探测，间隔为 3–5 个区段。当前按正文的 2–4 个区段运行，采集版需确定采用的规则。公开日志还显示两组在相同区段位置的计分来源逐段互补。采集版的效能序列在 [IKY25S](https://gitee.com/evclab/stroop-efficacy-learning/issues/IKY25S) 核对。
-- 作者分析脚本把区段内题间隔设为 250 ms，当前开发版继承了 150 ms。题间隔、翻屏计时和区段末题规则在 [IKY25G](https://gitee.com/evclab/stroop-efficacy-learning/issues/IKY25G) 验证。[作者分析脚本](https://github.com/igrahek/LFXC_EEG_2022/blob/eaebcb7a348109f20606a87f2210d3bb59bc7bf7/Analyses/Experiment2/Stats/brms/Experiment2_brms_models.R#L37)
+- 当前开发版以作者分析脚本的 250 ms 作为区段内题间空屏基线。剩余可呈现时间不足 350 ms 时停止出新题，已经显示的末题可以作答到区段截止。350 ms 是本项目的末题规则，采集版在预测试后锁定。[作者分析脚本](https://github.com/igrahek/LFXC_EEG_2022/blob/eaebcb7a348109f20606a87f2210d3bb59bc7bf7/Analyses/Experiment2/Stats/brms/Experiment2_brms_models.R#L37)
+
+## 计时核对
+
+区段从首个目标翻屏开始计时。按键有效时段从本题翻屏起，到固定区段截止时刻前。反应时由 PsychoPy Studio 的 Psychtoolbox 按键时间戳减去目标翻屏时间得到。反馈在截止后翻屏，以实际反馈翻屏为起点计时约 1.5 秒。键盘交互统一使用 PTB，在注视、作答、题间空屏、等待反馈或反馈显示时按 Esc，均会保存当前区段和中断时刻。中断时还未答完的题保留呈现时间并标为「试次中断」，正确字段留空。积分在反馈翻屏时结算。Esc 按下时刻早于反馈翻屏时，区段标为「反馈前」并留空得分，实际发生的翻屏与显示时长仍会记录。刷新率未测得或明显异常时，记录所采用的备用帧长，实测刷新率字段留空。
+
+在 PsychoPy Studio 的 Python 环境下，从仓库根目录运行：
+
+```powershell
+python tests/check_timing.py --studio
+```
+
+脚本在 2、3、4 秒区段验证正常作答、截止前、截止时、截止后和未答。它还覆盖确认页、说明页、探测按键以及区段内五个阶段的中断保存、反馈翻屏边界和落盘失败后的文件保留。真实窗口测试使用模拟按键，以软件时间戳核对计时。可加 `--fullscreen` 复测正式全屏。可用 `--isi 0.15` 对照旧版的题间空屏。
+
+在采集设备上可运行以下命令，按屏幕提示各轻按一次 D 和 J，核对当前设备的原生 PTB 队列是否能收到首键和已松开的短按，并确认同一次按压只记一次。
+
+```powershell
+python tests/check_timing.py --ptb-keyboard --fullscreen
+```
 
 ## 输出与版本
 
-输出写到脚本旁的 `data/`，包括单题 `trials.csv`、区段 `intervals.csv`、探测 `probes.csv` 和会话信息 `meta.json`。单题表的 `词` 与 `墨色` 记录实际刺激，`反应时` 以秒为单位。会话信息记录 Git 提交、脚本 SHA-256、运行参数和正式任务的字色 × 字义计数。分别统计已呈现和有按键的刺激。数据目录已被 Git 忽略。
+输出写到脚本旁的 `data/`，包括单题 `trials.csv`、区段 `intervals.csv`、探测 `probes.csv` 和会话信息 `meta.json`。单题表的 `词` 与 `墨色` 记录实际刺激，`反应时` 以秒为单位。区段表分别记录实际开放的作答窗用时、从区段截止到反馈翻屏的延迟、反馈显示时长，以及相关时间戳。它们同单题的目标与按键时间共用 PsychoPy 日志时钟，绝对时间戳在 CSV 以秒保留六位小数。会话信息记录正式任务累计积分、已结算区段数和中断区段数。它也记录 Git 提交、主脚本与模块的 SHA-256、运行参数和正式任务的字色 × 字义计数。分别统计已呈现和有按键的刺激。每次保存先在同一数据目录下写完新文件，再逐个替换，防止写入中断截断原文件。数据目录已被 Git 忽略。
+
+区段表中，「试次数」计入所有已呈现的题，包括显示后因中断而未答完的题。「一致比例」用这个题数作分母，反映实际呈现的刺激构成。「正确率」的分母排除标为「试次中断」的题，正常超时未答的题仍计入分母。没有可用于计算的试次时，相应比例留空。
 
 迁入的研究一色词版本可从 [`v1.2`](https://gitee.com/evclab/stroop-efficacy-learning/tree/v1.2) 查阅。研究二水果版和原说明见 [`exp2-v1.0`](https://gitee.com/evclab/stroop-efficacy-learning/tree/exp2-v1.0)。

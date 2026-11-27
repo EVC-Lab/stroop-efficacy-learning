@@ -1,0 +1,49 @@
+name: Stroop CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Python checks and virtual timing
+    runs-on: windows-2025
+    timeout-minutes: 15
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: .github/workflows/ci.yml
+
+      - name: Install check dependencies
+        run: python -m pip install "psychopy==2026.2.5" "ruff==0.15.11"
+
+      - name: Check Python syntax and lint
+        run: |
+          python -m compileall -q stroop_efficacy_learning.py stroop_efficacy tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m ruff check --select E9,F63,F7,F82 stroop_efficacy_learning.py stroop_efficacy tests
+
+      - name: Test virtual timing (250 ms ISI)
+        run: python tests/check_timing.py --isi 0.25
+
+      - name: Test virtual timing (150 ms ISI)
+        run: python tests/check_timing.py --isi 0.15
