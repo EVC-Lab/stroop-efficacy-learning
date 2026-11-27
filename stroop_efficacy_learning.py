@@ -550,10 +550,10 @@ class StroopEfficacyExp:
             "共 %d 个区段。按空格开始。"
             % (CFG["POINT_PER_CORRECT"], n), height=0.036)
 
-        for i, (window, eff_type) in enumerate(zip(schedule.windows, schedule.sources, strict=True)):
+        for i, window in enumerate(schedule.windows):
             if CFG["BREAK_EVERY"] and i > 0 and i % CFG["BREAK_EVERY"] == 0:
                 self.show_break(i, n)
-            self.run_interval(i, window, eff_type=eff_type)
+            self.run_interval(i, window, eff_type=schedule.sources[i])
             if i in schedule.probes:
                 self.run_probe(schedule.probes[i], after_interval=i)
             if i % 10 == 0:                    # 每 10 区段落盘一次，防崩溃丢数据

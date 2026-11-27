@@ -14,6 +14,7 @@ import math
 import random
 import sys
 from collections import Counter, deque
+from contextlib import ExitStack
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -156,9 +157,10 @@ def check_formal_protocol(exp, color_keys):
     assert (schedule.sequence, complement.sequence) == ("A", "B")
     assert schedule.windows == complement.windows == (2, 2, 3, 3, 4, 4) * 48
     assert schedule.block_ends == tuple(range(36, 289, 36))
+    assert len(schedule.sources) == len(complement.sources) == 288
     assert schedule.sources.count("performance") == 141
     assert complement.sources.count("performance") == 147
-    assert all(a != b for a, b in zip(schedule.sources, complement.sources, strict=True))
+    assert all(a != b for a, b in zip(schedule.sources, complement.sources))
     flags = "".join("1" if kind == "performance" else "0" for kind in schedule.sources)
     assert hashlib.sha256(flags.encode("ascii")).hexdigest() == (
         "4006f94d929cf76972a0874d0a98c4204c3911a9231da80dacbde69b900d8499"
@@ -198,13 +200,14 @@ def check_formal_protocol(exp, color_keys):
                 return "", None, None
             return color_keys[tuple(exp.word.color)], press, None
 
-        with (TemporaryDirectory() as outdir,
-              patch.object(exp, "outdir", outdir),
-              patch.object(exp, "wait_space"),
-              patch.object(exp, "show_break", side_effect=lambda done, _total: breaks.append(done)),
-              patch.object(exp, "run_probe",
-                           side_effect=lambda kind, after_interval: probe_events.append((after_interval, kind))),
-              patch.object(exp.timed_input, "wait_for_response", side_effect=respond)):
+        with TemporaryDirectory() as outdir, ExitStack() as patches:
+            patches.enter_context(patch.object(exp, "outdir", outdir))
+            patches.enter_context(patch.object(exp, "wait_space"))
+            patches.enter_context(patch.object(exp, "show_break", side_effect=lambda done, _total: breaks.append(done)))
+            patches.enter_context(patch.object(
+                exp, "run_probe", side_effect=lambda kind, after_interval: probe_events.append((after_interval, kind)),
+            ))
+            patches.enter_context(patch.object(exp.timed_input, "wait_for_response", side_effect=respond))
             exp.run_main()
             exp.save()
             meta = json.loads((Path(outdir) / "meta.json").read_text(encoding="utf-8"))
@@ -219,7 +222,7 @@ def check_formal_protocol(exp, color_keys):
         history = deque(task.CFG["YOKE_INIT_SCORES"], maxlen=10)
         score_rng = random.Random(f"{subject}-正向:score")
         cumulative = 0
-        for row, window, source in zip(exp.rows_intervals, schedule.windows, schedule.sources, strict=True):
+        for row, window, source in zip(exp.rows_intervals, schedule.windows, schedule.sources):
             assert row["窗口s"] == window and row["效能类型"] == source and row["效能概率"] == ""
             if source == "performance":
                 expected_score = row["正确数"] * 10

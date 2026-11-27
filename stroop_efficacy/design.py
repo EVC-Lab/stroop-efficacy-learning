@@ -1,5 +1,7 @@
 """实验参数、效能和作答窗调度，以及随机计分的历史匹配。"""
 
+from __future__ import annotations
+
 from collections import deque
 from dataclasses import dataclass
 from itertools import accumulate
