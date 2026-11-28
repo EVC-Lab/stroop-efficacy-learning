@@ -252,11 +252,10 @@ def verify_export(tmpdir):
 
         with (
             scripted_targets(("escape", 0.30)),
-            patch.object(task.core, "quit", side_effect=SystemExit),
         ):
             try:
                 exp.run_interval(36, exp.main_schedule.windows[36], "performance")
-            except SystemExit:
+            except task.SessionInterrupted:
                 pass
             else:
                 raise AssertionError(

@@ -1,10 +1,11 @@
-"""PsychoPy Studio 启动登记、场次查询及保存结果。"""
+"""常驻实验员登记与场次结果界面。"""
 
-from PyQt6 import QtCore, QtGui, QtWidgets
+from PyQt6 import QtCore, QtWidgets
 from psychopy.gui.qtgui import ensureQtApp
 
 from stroop_efficacy.archive import (
     MODES,
+    SNAPSHOT_STATUS,
     STATUS,
     describe_session,
     list_sessions,
@@ -12,100 +13,21 @@ from stroop_efficacy.archive import (
     performance_first,
 )
 
-
-def open_folder(path, parent):
-    if not QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(path))):
-        QtWidgets.QMessageBox.warning(parent, "无法打开目录", str(path))
+from .common import open_folder, plain_label
+from .session_browser import browse_sessions
 
 
-def plain_label(value):
-    label = QtWidgets.QLabel(value)
-    label.setTextFormat(QtCore.Qt.TextFormat.PlainText)
-    label.setWordWrap(True)
-    return label
-
-
-def browse_sessions(root, initial_code, parent):
-    dialog = QtWidgets.QDialog(parent)
-    dialog.setWindowTitle("查找场次")
-    dialog.resize(860, 420)
-    layout = QtWidgets.QVBoxLayout(dialog)
-    search = QtWidgets.QHBoxLayout()
-    label = QtWidgets.QLabel("参与者编码")
-    field = QtWidgets.QLineEdit(initial_code)
-    field.setObjectName("archive_code")
-    label.setBuddy(field)
-    search_button = QtWidgets.QPushButton("查找")
-    search.addWidget(label)
-    search.addWidget(field, 1)
-    search.addWidget(search_button)
-    layout.addLayout(search)
-    table = QtWidgets.QTableWidget(0, 5)
-    table.setObjectName("archive_sessions")
-    table.setHorizontalHeaderLabels(
-        ["参与者编码", "模式", "状态", "完整区段", "开始时间"]
-    )
-    table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
-    table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
-    table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
-    table.horizontalHeader().setStretchLastSection(True)
-    layout.addWidget(table)
-    location = plain_label("")
-    layout.addWidget(location)
-    buttons = QtWidgets.QHBoxLayout()
-    folder = QtWidgets.QPushButton("打开场次目录")
-    close = QtWidgets.QPushButton("返回登记")
-    buttons.addStretch()
-    buttons.addWidget(folder)
-    buttons.addWidget(close)
-    layout.addLayout(buttons)
-    entries = []
-
-    def select():
-        row = table.currentRow()
-        folder.setEnabled(row >= 0)
-        location.setText(str(entries[row].path) if row >= 0 else "没有匹配场次")
-
-    def refresh():
-        nonlocal entries
-        try:
-            entries = list_sessions(root, field.text().strip())
-        except OSError as exc:
-            QtWidgets.QMessageBox.warning(dialog, "无法读取场次目录", str(exc))
+class OperatorDialog(QtWidgets.QDialog):
+    def keyPressEvent(self, event):
+        if event.key() == QtCore.Qt.Key.Key_Escape:
+            event.accept()
             return
-        with QtCore.QSignalBlocker(table):
-            table.setRowCount(len(entries))
-            for row, entry in enumerate(entries):
-                values = (
-                    entry.code,
-                    MODES.get(entry.mode, "旧版"),
-                    STATUS.get(entry.status, "需核对"),
-                    str(entry.completed),
-                    entry.started_at or "—",
-                )
-                for column, value in enumerate(values):
-                    table.setItem(row, column, QtWidgets.QTableWidgetItem(value))
-            if entries:
-                table.selectRow(0)
-            else:
-                table.setCurrentCell(-1, -1)
-        table.resizeColumnsToContents()
-        select()
-
-    table.itemSelectionChanged.connect(select)
-    folder.clicked.connect(
-        lambda: open_folder(entries[table.currentRow()].path, dialog)
-    )
-    close.clicked.connect(dialog.accept)
-    search_button.clicked.connect(refresh)
-    field.returnPressed.connect(refresh)
-    refresh()
-    dialog.exec()
+        super().keyPressEvent(event)
 
 
-def ask_registration(root):
+def run_operator_panel(root, *, start_session, check_devices, version):
     ensureQtApp()
-    dialog = QtWidgets.QDialog()
+    dialog = OperatorDialog()
     dialog.setWindowTitle("色词 Stroop · 实验员登记")
     dialog.setMinimumWidth(520)
     layout = QtWidgets.QVBoxLayout(dialog)
@@ -130,18 +52,80 @@ def ask_registration(root):
     form.addRow("运行模式", mode_field)
     form.addRow("序列分配", direction_field)
     form.addRow("保存位置", path)
+    form.addRow("任务版本", plain_label(version))
     layout.addLayout(form)
     layout.addWidget(detail)
     buttons = QtWidgets.QHBoxLayout()
     history = QtWidgets.QPushButton("查找场次")
-    cancel = QtWidgets.QPushButton("取消")
+    devices = QtWidgets.QPushButton("设备检查")
     start = QtWidgets.QPushButton("核对并启动")
     buttons.addWidget(history)
+    buttons.addWidget(devices)
     buttons.addStretch()
-    buttons.addWidget(cancel)
     buttons.addWidget(start)
     layout.addLayout(buttons)
-    registration = None
+    notice = plain_label("")
+    layout.addWidget(notice)
+    latest = QtWidgets.QGroupBox("最近一场")
+    latest_layout = QtWidgets.QVBoxLayout(latest)
+    result_label = plain_label("")
+    result_label.setObjectName("session_result")
+    result_label.setTextInteractionFlags(
+        QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
+    )
+    latest_layout.addWidget(result_label)
+    folder = QtWidgets.QPushButton("打开场次目录")
+    latest_layout.addWidget(folder, alignment=QtCore.Qt.AlignmentFlag.AlignLeft)
+    layout.addWidget(latest)
+    latest.hide()
+    last_path = None
+
+    def run_in_task_window(action, *args):
+        dialog.setEnabled(False)
+        dialog.showMinimized()
+        try:
+            return action(*args)
+        finally:
+            dialog.setEnabled(True)
+            dialog.showNormal()
+            dialog.raise_()
+            dialog.activateWindow()
+
+    def show_device_check():
+        try:
+            notice.setText(run_in_task_window(check_devices))
+        except (Exception, KeyboardInterrupt) as exc:
+            notice.setText(f"设备检查未能完成。请检查显示和 PTB 键盘后重试。{exc}")
+
+    def show_result(result, code, mode):
+        nonlocal last_path
+        last_path = result.path
+        outcome = (
+            "启动失败" if result.status == "startup_failed" else STATUS[result.status]
+        )
+        lines = [f"{code} · {MODES[mode]} · {outcome}"]
+        if last_path is None:
+            lines.append("本场没有可校验的存档。")
+        else:
+            entry = describe_session(last_path, code, mode)
+            lines += [
+                f"会话编号  {entry.session_id}",
+                f"完整区段数  {entry.completed}",
+                f"保存状态  {SNAPSHOT_STATUS[entry.snapshot]}",
+                f"保存位置  {last_path}",
+            ]
+            if result.save_failed:
+                lines.append("结束时的保存失败。上方状态仅反映当前可读取的记录。")
+            if result.status == "completed" and entry.snapshot == "current":
+                code_field.clear()
+                direction_field.setCurrentIndex(0)
+        if result.detail:
+            lines.append(result.detail)
+        result_label.setText("\n".join(lines))
+        folder.setVisible(last_path is not None)
+        latest.show()
+        code_field.setFocus()
+        code_field.selectAll()
 
     def update_preview():
         mode = mode_field.currentData()
@@ -151,14 +135,20 @@ def ask_registration(root):
             code = None
         destination = root / mode if mode else root
         path.setText(str(destination / code if code and mode else destination))
-        detail.setText(
-            "窗口模式，12 个区段，仅供检查流程。"
-            if mode == "quick"
-            else ("完整流程，288 个区段，全屏运行。" if mode else "")
-        )
+        instructions = ""
+        if mode:
+            instructions = (
+                "窗口模式，12 个区段，仅供检查流程。"
+                if mode == "quick"
+                else "完整流程，288 个区段，全屏运行。"
+            )
+        if code:
+            direction = direction_field.currentData()
+            sequence = "B" if performance_first(code, direction) else "A"
+            instructions += f" 效能序列 {sequence}。"
+        detail.setText(instructions.strip())
 
     def confirm():
-        nonlocal registration
         try:
             code = participant_code(code_field.text())
         except ValueError as exc:
@@ -205,42 +195,19 @@ def ask_registration(root):
         message.setDefaultButton(back)
         message.exec()
         if message.clickedButton() == begin:
-            registration = ({"被试编号": code, "漂移方向": direction}, mode)
-            dialog.accept()
+            info = {"被试编号": code, "漂移方向": direction}
+            result = run_in_task_window(start_session, info, mode)
+            show_result(result, code, mode)
 
     code_field.textChanged.connect(update_preview)
     mode_field.currentIndexChanged.connect(update_preview)
+    direction_field.currentIndexChanged.connect(update_preview)
     history.clicked.connect(
         lambda: browse_sessions(root, code_field.text().strip(), dialog)
     )
-    cancel.clicked.connect(dialog.reject)
+    devices.clicked.connect(show_device_check)
+    folder.clicked.connect(lambda: open_folder(last_path, dialog))
     start.clicked.connect(confirm)
     start.setDefault(True)
     code_field.setFocus()
     dialog.exec()
-    return registration
-
-
-def show_session_result(path, code, mode, save_failed=False):
-    ensureQtApp()
-    message = QtWidgets.QMessageBox()
-    message.setWindowTitle("本场保存结果")
-    message.setTextFormat(QtCore.Qt.TextFormat.PlainText)
-    if path is None:
-        message.setText("本场未创建数据目录。")
-    else:
-        entry = describe_session(path, code, mode)
-        status = STATUS.get(entry.status, "需核对")
-        message.setText(f"{code} · {MODES[mode]} · {status}")
-        summary = f"完整区段数  {entry.completed}\n保存位置  {path}"
-        if entry.status == "recovery":
-            summary += "\n上一份可核对的记录在 .previous.zip。"
-        if save_failed:
-            summary += "\n本次结束时未能保存，请核对场次文件。"
-        message.setInformativeText(summary)
-        folder = message.addButton(
-            "打开场次目录", QtWidgets.QMessageBox.ButtonRole.ActionRole
-        )
-        folder.clicked.connect(lambda: open_folder(path, message))
-    message.addButton("关闭", QtWidgets.QMessageBox.ButtonRole.RejectRole)
-    message.exec()

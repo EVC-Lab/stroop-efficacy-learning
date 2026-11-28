@@ -1,79 +1,102 @@
 """从 PsychoPy Studio 启动色词 Stroop 行为任务。"""
 
 import traceback
+from contextlib import ExitStack
+from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
+from tempfile import TemporaryFile
 
-from psychopy import gui
-
-from stroop_efficacy.experiment import StroopEfficacyExp
+from stroop_efficacy.device_check import check_devices
+from stroop_efficacy.experiment import SessionInterrupted, StroopEfficacyExp
+from stroop_efficacy.session_data import code_version
 from stroop_efficacy.timing import open_timed_keyboard
-from ui.operator import ask_registration, show_session_result
+from ui.operator import run_operator_panel
 
 ENTRYPOINT = Path(__file__).resolve()
 
 
+@dataclass(frozen=True)
+class SessionResult:
+    status: str
+    path: Path | None = None
+    detail: str = ""
+    save_failed: bool = False
+
+
 def run_registered(info, mode, archive_root, keyboard):
-    """从已确认的登记运行一场，退出全屏后显示保存结果。"""
+    """运行一场实验，收回设备并返回任务结果。"""
     exp = None
+    detail = ""
     save_failed = False
-    error = None
     try:
-        exp = StroopEfficacyExp(
-            info,
-            keyboard=keyboard,
-            entrypoint=ENTRYPOINT,
-            mode=mode,
-            archive_root=archive_root,
-        )
-        exp.run()
-    except SystemExit:
+        with ExitStack() as cleanup:
+            cleanup.callback(keyboard.stop)
+            exp = StroopEfficacyExp(
+                info,
+                keyboard=keyboard,
+                entrypoint=ENTRYPOINT,
+                mode=mode,
+                archive_root=archive_root,
+            )
+            cleanup.callback(exp.win.close)
+            exp.run()
+    except SessionInterrupted:
         pass
     except (Exception, KeyboardInterrupt) as exc:
-        error = exc
-        if exp is not None:
+        traceback.print_exc()
+        detail = f"{type(exc).__name__}：{exc}"
+        if exp is None:
+            return SessionResult("startup_failed", detail=f"无法启动实验窗口。{detail}")
+        try:
+            exp.finish("error")
+        except (Exception, KeyboardInterrupt):
+            save_failed = True
+            traceback.print_exc()
+        if exp.outdir is not None:
             try:
-                exp.finish("error")
-            except (Exception, KeyboardInterrupt):
-                save_failed = True
-                traceback.print_exc()
-        if exp is not None and exp.outdir is not None:
-            try:
-                log = "".join(
-                    traceback.format_exception(type(exc), exc, exc.__traceback__)
-                )
+                log = "".join(traceback.format_exception(exc))
                 (exp.outdir / "error.log").write_text(log, encoding="utf-8")
             except OSError:
                 traceback.print_exc()
-    finally:
-        keyboard.stop()
-        if exp is not None:
-            exp.win.close()
-    show_session_result(
-        exp.outdir if exp is not None else None,
-        exp.subj if exp is not None else info["被试编号"],
-        mode,
-        save_failed,
+    return SessionResult(
+        "error" if detail else exp.session_status, exp.outdir, detail, save_failed
     )
-    if error is not None:
-        raise error
 
 
-def launch_experiment():
-    """打开实验员登记页并启动已确认的场次。"""
-    root = ENTRYPOINT.parent / "data"
-    registration = ask_registration(root)
-    if registration is None:
-        return
+def start_session(info, mode, archive_root):
+    destination = archive_root / mode / info["被试编号"]
+    try:
+        destination.mkdir(parents=True, exist_ok=True)
+        with TemporaryFile(dir=destination) as probe:
+            probe.write(b"ok")
+            probe.flush()
+    except OSError as exc:
+        return SessionResult(
+            "startup_failed",
+            detail=f"保存位置不可写。请检查磁盘空间和目录权限后重试。\n{destination}\n{exc}",
+        )
     try:
         keyboard = open_timed_keyboard()
     except (ImportError, OSError, RuntimeError) as exc:
-        dialog = gui.Dlg(title="无法初始化实验键盘")
-        dialog.addText("请在 PsychoPy Studio 中检查 Psychtoolbox 键盘后端。")
-        dialog.addText(str(exc))
-        dialog.show()
-        return
-    info, mode = registration
-    run_registered(info, mode, root, keyboard)
+        return SessionResult(
+            "startup_failed",
+            detail=f"无法初始化 PTB 键盘。请检查 PsychoPy Studio 环境后重试。\n{exc}",
+        )
+    return run_registered(info, mode, archive_root, keyboard)
+
+
+def launch_experiment():
+    """保持实验员窗口开启，直至实验员关闭。"""
+    root = ENTRYPOINT.parent / "data"
+    commit, entry_hash, _ = code_version(ENTRYPOINT)
+    version = commit if commit != "unknown" else f"入口 SHA-256 {entry_hash[:12]}"
+    run_operator_panel(
+        root,
+        start_session=partial(start_session, archive_root=root),
+        check_devices=check_devices,
+        version=version,
+    )
 
 
 if __name__ == "__main__":

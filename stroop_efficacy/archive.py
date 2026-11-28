@@ -18,6 +18,12 @@ STATUS = {
     "unverified": "未完成，需核对文件",
     "legacy": "旧版，状态未记录",
 }
+SNAPSHOT_STATUS = {
+    "current": "当前快照已校验",
+    "previous": "可恢复上一份快照",
+    "unreadable": "无可校验快照",
+    "legacy": "旧版未提供校验信息",
+}
 RESERVED_CODES = {"CON", "PRN", "AUX", "NUL"} | {
     f"{prefix}{i}" for prefix in ("COM", "LPT") for i in range(1, 10)
 }
@@ -52,6 +58,15 @@ class ArchiveEntry:
     started_at: str
     finished_at: str
     path: Path
+    snapshot: str
+    version: str
+
+
+def _version_label(meta):
+    commit = meta.get("代码版本")
+    if isinstance(commit, str) and commit and commit != "unknown":
+        return commit
+    return str(meta.get("版本") or "")
 
 
 def describe_session(directory, code, mode):
@@ -78,6 +93,8 @@ def describe_session(directory, code, mode):
         str(meta.get("会话开始时间") or ""),
         str(meta.get("会话结束时间") or "") if not recovered else "",
         directory,
+        "previous" if recovered else ("current" if meta else "unreadable"),
+        _version_label(meta),
     )
 
 
@@ -117,9 +134,11 @@ def list_sessions(root, code=""):
                         str(meta.get("会话编号", "—")),
                         "legacy",
                         meta.get("完整区段数", "—"),
-                        "",
-                        "",
+                        str(meta.get("会话开始时间") or ""),
+                        str(meta.get("会话结束时间") or ""),
                         directory,
+                        "legacy",
+                        _version_label(meta),
                     )
                 )
 

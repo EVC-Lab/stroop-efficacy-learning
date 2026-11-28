@@ -4,16 +4,16 @@
 
 ## 在 PsychoPy Studio 运行
 
-在 PsychoPy Studio 打开 **Coder**，打开仓库根目录的 [run.py](run.py)，点击 **Run**。保留脚本旁的 `stroop_efficacy/` 和 `ui/` 目录。在实验员登记页填写参与者编码、选择模式，核对序列和保存位置后启动。任务中可按 Esc 退出并保存已有记录。
+在 PsychoPy Studio 打开 **Coder**，打开仓库根目录的 [run.py](run.py)，点击 **Run**。保留脚本旁的 `stroop_efficacy/` 和 `ui/` 目录。在实验员登记页填写参与者编码、选择模式，核对序列和保存位置后启动。任务中可按 Esc 中断并保存已有记录。场次结束或启动出错后回到同一登记窗口，可以从这里重试或开始下一场。关闭登记窗口即结束本次运行。
 
 - **快跑**以窗口模式运行 12 个区段，单段作答窗口为 1 秒。
 - **预测试**和**正式采集**均以全屏运行三段练习和 288 个正式区段，归档目录按模式区分。采集版本将在[路线图](https://github.com/EVC-Lab/stroop-efficacy-learning/issues/8)中的验收完成后锁定。
 
-参与者编码支持 1–32 位字母、数字、连字符和下划线，以字母或数字开头，保存时统一使用大写。姓名与编号的对照由实验员另行保管。启动前若找到同一编码的既有场次，会显示状态并要求确认重跑。登记页的**查找场次**可按编码查看状态和完整区段数、打开场次目录。正常结束或退出后会显示本场保存结果。
+参与者编码支持 1–32 位字母、数字、连字符和下划线，以字母或数字开头，保存时统一使用大写。姓名与编号的对照由实验员另行保管。启动前若找到同一编码的既有场次，会显示状态并要求确认重跑。登记页的**设备检查**在正式全屏显示上检查中文样字和 D、F、J、K 响应。**查找场次**可按编码、模式、开始日期和保存状态筛选，查看会话编号、版本与结束时间。最近一场的结果分别显示实验状态、完整区段数、保存校验与目录入口。
 
 ## 程序结构
 
-[`run.py`](run.py) 负责启动、初始化键盘和场次收尾。[`experiment.py`](stroop_efficacy/experiment.py) 负责被试界面、作答、计分和区段流程。顶层的 [`ui/operator.py`](ui/operator.py) 提供实验员登记、场次查询和保存结果。
+[`run.py`](run.py) 负责启动、初始化键盘和场次收尾。[`experiment.py`](stroop_efficacy/experiment.py) 负责被试界面、作答、计分和区段流程。顶层的 [`ui/operator.py`](ui/operator.py) 提供实验员登记与保存结果，[`ui/session_browser.py`](ui/session_browser.py) 提供本地场次查询。
 
 [`design.py`](stroop_efficacy/design.py) 管理实验参数、窗长与效能调度和历史积分抽样。[`timing.py`](stroop_efficacy/timing.py) 管理 PTB 按键和截止判定。[`archive.py`](stroop_efficacy/archive.py) 管理编码和归档查询。[`session_data.py`](stroop_efficacy/session_data.py) 保存会话文件和代码摘要。
 

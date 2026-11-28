@@ -48,6 +48,22 @@ def mouse_left_pressed(mouse):
     return False
 
 
+class SessionInterrupted(Exception):
+    """Return control to the operator after an intentional task exit."""
+
+
+def open_task_window(settings):
+    return visual.Window(
+        size=(1280, 800),
+        fullscr=settings["FULLSCR"],
+        color=settings["BG_COLOR"],
+        units="height",
+        allowGUI=False,
+        checkTiming=False,
+        waitBlanking=True,
+    )
+
+
 class StroopEfficacyExp:
     def __init__(
         self, info, keyboard=None, *, entrypoint, mode=None, archive_root=None
@@ -82,15 +98,7 @@ class StroopEfficacyExp:
                 keyboard = open_timed_keyboard()
                 cleanup.callback(keyboard.stop)
             self.timed_input = TimedInput(keyboard)
-            self.win = visual.Window(
-                size=(1280, 800),
-                fullscr=self.settings["FULLSCR"],
-                color=self.settings["BG_COLOR"],
-                units="height",
-                allowGUI=False,
-                checkTiming=False,
-                waitBlanking=True,
-            )
+            self.win = open_task_window(self.settings)
             cleanup.callback(self.win.close)
             self._initialize_window()
 
@@ -125,6 +133,7 @@ class StroopEfficacyExp:
             measured_hz, self.win.monitorFramePeriod
         )
         self.timed_input.keyboard.start()
+        self.timed_input.keyboard.clearEvents()
 
         self.fix = visual.TextStim(self.win, "+", font=f, color=(1, 1, 1), height=0.09)
         self.word = visual.TextStim(
@@ -321,7 +330,7 @@ class StroopEfficacyExp:
     def abort(self):
         if self.session_status == "running":
             self.finish("interrupted")
-        core.quit()
+        raise SessionInterrupted
 
     def finish(self, status):
         previous = self.session_status, self.finished_at
