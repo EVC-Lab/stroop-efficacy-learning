@@ -44,10 +44,12 @@ def check_joins(meta, tables):
     trials_by_interval = defaultdict(list)
     for i, row in enumerate(tables["trials.csv"], start=1):
         assert int(row["试次编号"]) == i
-        if row["区段"]:
+        if row["阶段"] in {"main", "prac3"}:
             key = interval_key(row)
             assert row["组块"] == intervals[key]["组块"]
             trials_by_interval[key].append(row)
+        else:
+            assert row["阶段"] in {"prac1", "prac2"} and row["区段"] == ""
         if row["作答状态"] == "responded":
             rt = float(row["反应时"])
             assert 0 <= rt < float(row["可作答时长s"])
@@ -120,6 +122,8 @@ def verify_export(tmpdir):
 
         with scripted_targets(("d", 0.3123456789)):
             exp._practice_trial("red", "", with_fb=False, phase="prac1")
+        with scripted_targets(("f", 0.32)):
+            exp._practice_trial("red", "绿", with_fb=False, phase="prac2")
         with scripted_targets(), patch.object(exp, "make_trial_content", return_value=("red", "绿", "incongruent")):
             exp.run_interval(0, 1.0, "performance", phase="prac3", practice_yoke=task.YokeWindow(init=[]))
         with scripted_targets(("d", 0.3123456789), ("f", 0.26)), patch.object(
