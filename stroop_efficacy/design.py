@@ -71,17 +71,22 @@ CFG = {
     "PRAC_WINDOW": 2.0,  # 练习区段的窗口长度
 }
 
-if CFG["DEBUG_FAST"]:  # 一键快跑，只为检查流程
-    CFG.update(
-        N_INTERVALS=12,
-        FULLSCR=False,
-        BREAK_EVERY=0,
-        FIX_CHOICES=(0.3,),
-        WINDOW_CHOICES=(1.0,),
-        FB_DUR=0.5,
-        PRAC_WINDOW=1.0,
-        PRAC_TIMEOUT=1.2,
-    )
+
+def run_settings(mode):
+    """为一次登记生成独立的参数，预测试使用完整流程。"""
+    settings = dict(CFG, DEBUG_FAST=mode == "quick", SKIP_PRACTICE=False)
+    if settings["DEBUG_FAST"]:
+        settings.update(
+            N_INTERVALS=12,
+            FULLSCR=False,
+            BREAK_EVERY=0,
+            FIX_CHOICES=(0.3,),
+            WINDOW_CHOICES=(1.0,),
+            FB_DUR=0.5,
+            PRAC_WINDOW=1.0,
+            PRAC_TIMEOUT=1.2,
+        )
+    return settings
 
 
 # ==============================================================================
@@ -116,12 +121,12 @@ class MainSchedule:
         )
 
 
-def make_main_schedule(performance_first, probe_rng):
+def make_main_schedule(performance_first, probe_rng, settings=CFG):
     """重放正式窗长和来源。探测题采用公开日志中的配额与交替规则。"""
-    n = CFG["N_INTERVALS"]
+    n = settings["N_INTERVALS"]
     flags = "".join(RANDOM_FIRST_BLOCKS)
     windows = WINDOW_BLOCK * len(RANDOM_FIRST_BLOCKS)
-    fast = CFG["DEBUG_FAST"]
+    fast = settings["DEBUG_FAST"]
     if n < 1 or n > len(flags) or (not fast and n != len(flags)):
         raise ValueError("正式调度须包含完整的 Study 2 区段，快跑可截短。")
 
@@ -136,7 +141,7 @@ def make_main_schedule(performance_first, probe_rng):
         else ("reward", "efficacy")
     )
     if fast:
-        windows = (CFG["WINDOW_CHOICES"][0],) * n
+        windows = (settings["WINDOW_CHOICES"][0],) * n
         gaps = [probe_rng.randint(2, 3) for _ in range(n // 2)]
         block_ends = (n,)
     else:

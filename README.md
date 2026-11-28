@@ -4,14 +4,16 @@
 
 ## 在 PsychoPy Studio 运行
 
-在 PsychoPy Studio 打开 **Coder**，打开仓库根目录的 [stroop_efficacy_learning.py](stroop_efficacy_learning.py)，点击 **Run**。运行时将同目录的 `stroop_efficacy/` 与主脚本一起保留。启动时先检查 Studio 的 Psychtoolbox 键盘后端，然后进入被试登记。被试信息确认后按空格开始，任务中可按 Esc 退出并保存已有记录。
+在 PsychoPy Studio 打开 **Coder**，打开仓库根目录的 [stroop_efficacy_learning.py](stroop_efficacy_learning.py)，点击 **Run**。保留主脚本旁的 `stroop_efficacy/`。在实验员登记页填写参与者编码、选择模式，核对序列和保存位置后启动。任务中可按 Esc 退出并保存已有记录。
 
-- **快跑**　将 `stroop_efficacy/design.py` 的 `CFG` 中 `DEBUG_FAST` 改为 `True`，以窗口模式运行 12 个区段，作答窗口缩短为 1 秒。适用于检查按键、反馈、探测与导出。
-- **完整流程**　保持 `DEBUG_FAST=False` 和 `SKIP_PRACTICE=False`。以全屏运行三段练习和 288 个正式区段。当前合并版用于开发验证，采集版本将在[路线图](https://github.com/EVC-Lab/stroop-efficacy-learning/issues/8)中的验收完成后锁定。
+- **快跑**以窗口模式运行 12 个区段，单段作答窗口为 1 秒。
+- **预测试**和**正式采集**均以全屏运行三段练习和 288 个正式区段，归档目录按模式区分。采集版本将在[路线图](https://github.com/EVC-Lab/stroop-efficacy-learning/issues/8)中的验收完成后锁定。
+
+参与者编码支持 1–32 位字母、数字、连字符和下划线，以字母或数字开头，保存时统一使用大写。姓名与编号的对照由实验员另行保管。启动前若找到同一编码的既有场次，会显示状态并要求确认重跑。登记页的**查找场次**可按编码查看状态和完整区段数、打开场次目录。正常结束或退出后会显示本场保存结果。
 
 ## 程序结构
 
-主脚本负责实验界面、作答与区段流程。[`design.py`](stroop_efficacy/design.py) 管理实验参数、窗长与效能调度和历史积分抽样。[`timing.py`](stroop_efficacy/timing.py) 管理 PTB 按键和截止判定。[`session_data.py`](stroop_efficacy/session_data.py) 负责保存会话文件和记录代码摘要。
+主脚本负责实验界面、作答与区段流程。[`design.py`](stroop_efficacy/design.py) 管理实验参数、窗长与效能调度和历史积分抽样。[`timing.py`](stroop_efficacy/timing.py) 管理 PTB 按键和截止判定。[`operator_ui.py`](stroop_efficacy/operator_ui.py) 提供登记、场次查询和保存结果。[`archive.py`](stroop_efficacy/archive.py) 管理编码和归档查询。[`session_data.py`](stroop_efficacy/session_data.py) 保存会话文件和代码摘要。
 
 ## 作答流程
 
@@ -40,7 +42,7 @@
 python tests/check_timing.py --studio
 ```
 
-脚本在 2、3、4 秒区段验证正常作答、截止前、截止时、截止后和未答。它还覆盖确认页、说明页、探测按键以及区段内五个阶段的中断保存、反馈翻屏边界和落盘失败后的文件保留。真实窗口测试使用模拟按键，以软件时间戳核对计时。可加 `--fullscreen` 复测正式全屏。可用 `--isi 0.15` 对照旧版的题间空屏。
+脚本在 2、3、4 秒区段验证正常作答、截止前、截止时、截止后和未答。它还覆盖说明页、探测按键以及区段内五个阶段的中断保存、反馈翻屏边界和落盘失败后的文件保留。真实窗口测试使用模拟按键，以软件时间戳核对计时。可加 `--fullscreen` 复测正式全屏。可用 `--isi 0.15` 对照旧版的题间空屏。
 
 去掉 `--studio` 可运行虚拟时钟检查。它也会以两种合成作答速度执行完整的 288 段流程，核对预定序列、探测题、历史积分抽样与累计分。
 
@@ -52,8 +54,10 @@ python tests/check_timing.py --ptb-keyboard --fullscreen
 
 ## 输出与版本
 
-每次运行在脚本旁的 `data/` 写出 `trials.csv`、`intervals.csv`、`probes.csv` 和 `meta.json`。三个表用会话编号、阶段和区段号关联。同一被试重跑有新的会话编号。单题 RT 以秒保存，并区分有效作答、截止未答与中断。元数据记录正式调度、代码和参数版本、各表行数及 SHA-256，可校验同一次保存的文件。
+每次运行在脚本旁的 `data/<模式>/<参与者编码>/<会话编号>/` 写出 `trials.csv`、`intervals.csv`、`probes.csv` 和 `meta.json`。目录中的模式分别为 `formal`、`pilot` 和 `quick`。同一编码重跑有新的会话编号。单题 RT 以秒保存，并区分有效作答、截止未答与中断。元数据记录模式、时间、状态、调度、代码和参数版本、各表行数及 SHA-256。若当前文件校验失败，查找场次会标出是否有可恢复的上一份快照。
 
 [行为数据导出与分析说明](docs/behavior-analysis.md)包含字段、合表键、旧数据导入、反馈前模型预期和 DDM 筛选。真实被试数据保存在采集端。`data/` 已由 Git 忽略。
+
+可在 PsychoPy Studio 的 Python 环境运行 `python tests/check_operator.py --studio-ui`，使用合成数据复测登记、查询和重跑确认。
 
 迁入的研究一色词版本可从 [`v1.2`](https://gitee.com/evclab/stroop-efficacy-learning/tree/v1.2) 查阅。研究二水果版和原说明见 [`exp2-v1.0`](https://gitee.com/evclab/stroop-efficacy-learning/tree/exp2-v1.0)。

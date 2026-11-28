@@ -6,11 +6,14 @@ import json
 import os
 import subprocess
 from collections import Counter
+from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from zipfile import BadZipFile, ZipFile
 
 
-EXPORT_VERSION = 1
+EXPORT_VERSION = 2
+RECOVERY_FILE = ".previous.zip"
 
 TABLE_FIELDS = {
     "trials.csv": (
@@ -153,8 +156,53 @@ def stimulus_counts(rows, inks, words):
     return {ink: {word: counts[ink, word] for word in words} for ink in inks}
 
 
+def checked_snapshot(read_file):
+    """校验三个 CSV 的摘要、表头和记录数。"""
+    try:
+        files = {"meta.json": read_file("meta.json")}
+        meta = json.loads(files["meta.json"])
+        for name, fields in TABLE_FIELDS.items():
+            contents = read_file(name)
+            summary = meta["数据表"][name]
+            if hashlib.sha256(contents).hexdigest() != summary["SHA256"]:
+                return None
+            with StringIO(contents.decode("utf-8-sig"), newline="") as stream:
+                reader = csv.reader(stream, strict=True)
+                if (
+                    tuple(next(reader, ())) != fields
+                    or sum(1 for _ in reader) != summary["行数"]
+                ):
+                    return None
+            files[name] = contents
+        return meta, files
+    except (
+        OSError,
+        ValueError,
+        TypeError,
+        KeyError,
+        RuntimeError,
+        BadZipFile,
+        csv.Error,
+    ):
+        return None
+
+
+def read_session_snapshot(directory):
+    """先查当前快照，校验失败时查上一份已保存快照。"""
+    current = checked_snapshot(lambda name: (directory / name).read_bytes())
+    if current:
+        return current[0], False
+    try:
+        with ZipFile(directory / RECOVERY_FILE) as archive:
+            previous = checked_snapshot(archive.read)
+    except (OSError, BadZipFile):
+        previous = None
+    return (previous[0], True) if previous else (None, False)
+
+
 def write_snapshot(outdir, tables, meta):
     # 各文件写完整后逐个替换，最后发布元数据供读者校验同一快照。
+    outdir = Path(outdir)
     with TemporaryDirectory(prefix=".save-", dir=outdir) as staging:
         staged_files = []
         summaries = {}
@@ -185,5 +233,17 @@ def write_snapshot(outdir, tables, meta):
             json.dump({**meta, "数据表": summaries}, fh, ensure_ascii=False, indent=2)
             fh.flush()
             os.fsync(fh.fileno())
+
+        # 先发布上一份完整快照。即使进程在逐表替换期间退出，仍可校验并读取它。
+        current = checked_snapshot(lambda name: (outdir / name).read_bytes())
+        if current:
+            backup = Path(staging) / RECOVERY_FILE
+            with backup.open("w+b") as fh:
+                with ZipFile(fh, "w") as archive:
+                    for name, contents in current[1].items():
+                        archive.writestr(name, contents)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(backup, outdir / RECOVERY_FILE)
         for staged in (*staged_files, staged_meta):
-            os.replace(staged, Path(outdir) / staged.name)
+            os.replace(staged, outdir / staged.name)
