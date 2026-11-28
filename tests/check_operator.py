@@ -164,8 +164,22 @@ def verify_archive(root):
                     assert str(exc) == "response wait interrupted"
                 else:
                     raise AssertionError("Interval exception was swallowed")
-    assert window_sizes == [False, False, True, True, True, False, True, True]
-    assert result.call_count == 7 and len(closed_windows) == 8
+        with (
+            patch.object(
+                visual, "TextStim", side_effect=RuntimeError("window setup failed")
+            ),
+            patch.object(keyboard, "stop") as stop_keyboard,
+        ):
+            try:
+                launcher.run_registered(INFO, "pilot", root, keyboard)
+            except RuntimeError as exc:
+                assert str(exc) == "window setup failed"
+            else:
+                raise AssertionError("Startup failure was swallowed")
+            stop_keyboard.assert_called_once()
+            result.assert_called_with(None, CODE, "pilot", False)
+    assert window_sizes == [False, False, True, True, True, False, True, True, True]
+    assert result.call_count == 8 and len(closed_windows) == 9
     (end_failure,) = archive.list_sessions(root, end_failure_code)
     assert end_failure.status == "error" and end_failure.completed == 12
     for code, phase in zip(partial_codes, ("main", "prac3")):

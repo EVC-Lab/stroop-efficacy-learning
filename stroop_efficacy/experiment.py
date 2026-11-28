@@ -2,6 +2,7 @@
 
 import random
 import statistics
+from contextlib import ExitStack
 from datetime import datetime
 from math import isfinite
 from pathlib import Path
@@ -75,18 +76,35 @@ class StroopEfficacyExp:
             entrypoint
         )
 
-        keyboard = open_timed_keyboard() if keyboard is None else keyboard
-        self.timed_input = TimedInput(keyboard)
+        # 初始化失败时，关闭已接管的资源。成功后由场次启动方正常收尾。
+        with ExitStack() as cleanup:
+            if keyboard is None:
+                keyboard = open_timed_keyboard()
+                cleanup.callback(keyboard.stop)
+            self.timed_input = TimedInput(keyboard)
+            self.win = visual.Window(
+                size=(1280, 800),
+                fullscr=self.settings["FULLSCR"],
+                color=self.settings["BG_COLOR"],
+                units="height",
+                allowGUI=False,
+                checkTiming=False,
+                waitBlanking=True,
+            )
+            cleanup.callback(self.win.close)
+            self._initialize_window()
 
-        self.win = visual.Window(
-            size=(1280, 800),
-            fullscr=self.settings["FULLSCR"],
-            color=self.settings["BG_COLOR"],
-            units="height",
-            allowGUI=False,
-            checkTiming=False,
-            waitBlanking=True,
-        )
+            self.response_keys = [*self.settings["KEYS"].values(), "escape"]
+            self.yoke = YokeWindow(
+                self.settings["YOKE_WINDOW"], self.settings["YOKE_INIT_SCORES"]
+            )
+            self.total_score = 0.0
+            self.rows_trials = []
+            self.rows_intervals = []
+            self.rows_probes = []
+            cleanup.pop_all()
+
+    def _initialize_window(self):
         self.win.setMouseVisible(False)
         measured_hz = self.win.getActualFrameRate(
             infoMsg="正在测量显示器刷新率，请稍候"
@@ -176,16 +194,6 @@ class StroopEfficacyExp:
         self.probe_num = visual.TextStim(
             self.win, "", font=f, color=(1, 1, 1), height=0.04, pos=(0, 0.10)
         )
-
-        # ---- 运行时状态 ----
-        self.response_keys = [*self.settings["KEYS"].values(), "escape"]
-        self.yoke = YokeWindow(
-            self.settings["YOKE_WINDOW"], self.settings["YOKE_INIT_SCORES"]
-        )
-        self.total_score = 0.0
-        self.rows_trials = []
-        self.rows_intervals = []
-        self.rows_probes = []
 
     # -------------------------------------------------------------- 被试信息
     def update_info(self, info):
