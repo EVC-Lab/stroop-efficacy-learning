@@ -7,7 +7,7 @@
 ----
 Windows：打开 StroopEfficacyLearning 文件夹，双击 StroopEfficacyLearning.exe。
 macOS：双击 StroopEfficacyLearning.app。发布包目前未签名和公证；如系统阻止打开，请遵守本机构安全政策，在系统设置中核对后允许打开，不要关闭整体安全保护。
-Linux：在 StroopEfficacyLearning 文件夹中运行 StroopEfficacyLearning。需要目标机具备正常的图形桌面、OpenGL 和 Psychtoolbox 可用的键盘环境。
+Linux：在包含可执行文件的 StroopEfficacyLearning 文件夹中运行 ./StroopEfficacyLearning。需要正常的图形桌面、OpenGL、音频运行库和可用的 Psychtoolbox 键盘环境。
 
 数据保存
 --------

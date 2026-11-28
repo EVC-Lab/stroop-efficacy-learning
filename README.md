@@ -62,7 +62,7 @@ python tests/check_timing.py --ptb-keyboard --fullscreen
 
 ## 独立版发布
 
-源码支持 PyInstaller 独立运行。PR、`main` 推送和手动 CI 会在 Windows、Linux、macOS Intel 与 Apple Silicon runner 上构建并运行启动自检；只有发布 `standalone-vX.Y.Z` 形式的 GitHub Release，才会把各平台程序和 SHA-256 校验文件上传为附件。独立版会话默认写入各操作系统的用户数据目录，升级程序不会覆盖既有场次，登记页显示实际保存位置。版本发布、包名、数据目录和设备验收边界见[独立版发布机制](docs/standalone-release.md)。
+源码支持 PyInstaller 独立运行。PR、`main` 推送和手动 CI 会在 Windows、Linux、macOS Intel 与 Apple Silicon runner 上构建并运行启动自检；发布标签采用 `standalone-vX.Y.Z` 或 `standalone-vX.Y.Z-rc.N` 时，各平台构建与解压自检均通过后才上传程序包和 SHA-256 校验文件。独立版会话默认写入各操作系统的用户数据目录，升级程序不会覆盖既有场次，登记页显示实际保存位置。版本发布、包名、数据目录和设备验收边界见[独立版发布机制](docs/standalone-release.md)。
 
 可在 PsychoPy Studio 的 Python 环境运行 `python tests/check_operator.py --studio-ui`，使用合成数据复测登记、查询和重跑确认。
 

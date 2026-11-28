@@ -1,5 +1,6 @@
 """独立版路径、发布标签、冻结版本信息和启动自检的纯逻辑测试。"""
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -39,7 +40,9 @@ def check_release_versions():
 
 def check_archive_paths(root):
     source = runtime.default_archive_root(
-        environ={}, frozen=False, source_root=root / "source"
+        environ={runtime.DATA_DIR_ENV: str(root / "override")},
+        frozen=False,
+        source_root=root / "source",
     )
     assert source == root / "source" / "data"
     override = runtime.default_archive_root(
@@ -77,6 +80,31 @@ def check_archive_paths(root):
         home=root / "home",
     )
     assert linux == root / "xdg" / "EVC-Lab" / "stroop-efficacy-learning" / "data"
+
+
+def check_macos_bundle_boundary(root):
+    app = root / "StroopEfficacyLearning.app"
+    executable = app / "Contents" / "MacOS" / "StroopEfficacyLearning"
+    patches = frozen(app / "Contents" / "Frameworks", executable)
+    with (
+        patches[0],
+        patches[1],
+        patches[2],
+        patch.object(runtime.sys, "platform", "darwin"),
+    ):
+        assert runtime.executable_root() == app.resolve()
+        for subfolder in ("MacOS", "Resources", "Frameworks"):
+            try:
+                runtime.default_archive_root(
+                    environ={
+                        runtime.DATA_DIR_ENV: str(
+                            app / "Contents" / subfolder / "sessions"
+                        )
+                    }
+                )
+            except RuntimeError:
+                continue
+            raise AssertionError(f"允许在 app 内保存数据：{subfolder}")
 
 
 def write_build_info(directory, version="1.2.3"):
@@ -117,16 +145,32 @@ def check_frozen_metadata(root):
 
 def check_smoke_test(root):
     bundle = root / "bundle"
-    write_build_info(bundle, version="2.0.0-rc.1")
+    info = write_build_info(bundle, version="2.0.0-rc.1")
     report = root / "reports" / "smoke.json"
     data = root / "persistent" / "sessions"
-    patches = frozen(bundle, root / "program" / "StroopEfficacyLearning")
+    executable = root / "program" / "StroopEfficacyLearning"
+    executable.parent.mkdir()
+    payload = b"frozen executable fixture"
+    executable.write_bytes(payload)
+    expected = hashlib.sha256(payload).hexdigest()
+    patches = frozen(bundle, executable)
     env = {
         runtime.DATA_DIR_ENV: str(data),
         runtime.SMOKE_REPORT_ENV: str(report),
     }
     with patches[0], patches[1], patches[2], patch.dict(os.environ, env, clear=False):
-        result = runtime.standalone_smoke_test(root / "missing.py")
+        result = runtime.standalone_smoke_test()
+        builder.validate_smoke_report(result, info, expected)
+        executable.write_bytes(payload + b"modified")
+        tampered = runtime.standalone_smoke_test(
+            report_path=report.parent / "tampered.json"
+        )
+        try:
+            builder.validate_smoke_report(tampered, info, expected)
+        except RuntimeError as exc:
+            assert "SHA-256" in str(exc)
+        else:
+            raise AssertionError("可执行文件内容不匹配时仍通过构建自检。")
     assert result["status"] == "ok"
     assert result["bundle_version"] == "2.0.0-rc.1"
     assert Path(result["archive_root"]) == data.resolve()
@@ -144,11 +188,23 @@ def check_missing_info(root):
     raise AssertionError("独立包缺少构建信息时没有报错。")
 
 
+def check_invalid_platform(root):
+    output = root / "output"
+    try:
+        builder.build("1.2.3", "unsupported-platform", root=root, output_root=output)
+    except ValueError:
+        assert not output.exists()
+        return
+    raise AssertionError("未经支持的平台可以创建构建输出。")
+
+
 def main():
     check_release_versions()
     with TemporaryDirectory() as directory:
         root = Path(directory)
         check_archive_paths(root)
+        check_macos_bundle_boundary(root)
+        check_invalid_platform(root)
         check_frozen_metadata(root)
         check_smoke_test(root)
         check_missing_info(root)

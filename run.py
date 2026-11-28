@@ -104,7 +104,7 @@ def main():
     if "--standalone-smoke-test" in sys.argv:
         from stroop_efficacy.runtime import standalone_smoke_test
 
-        standalone_smoke_test(ENTRYPOINT)
+        standalone_smoke_test()
         return
     launch_experiment()
 

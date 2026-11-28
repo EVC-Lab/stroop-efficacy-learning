@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -27,7 +28,14 @@ def bundle_root():
 
 def executable_root():
     """程序所在目录，不用来保存独立版的会话数据。"""
-    return Path(sys.executable).resolve().parent if is_frozen() else SOURCE_ROOT
+    if not is_frozen():
+        return SOURCE_ROOT
+    executable = Path(sys.executable).resolve()
+    if sys.platform == "darwin":
+        for directory in executable.parents:
+            if directory.suffix.lower() == ".app":
+                return directory
+    return executable.parent
 
 
 def bundled_build_info(required=False):
@@ -58,26 +66,26 @@ def default_archive_root(
     *, environ=None, frozen=None, platform=None, home=None, source_root=None
 ):
     """返回持久数据目录；显式环境变量优先，便于采集机统一管理。"""
-    env = os.environ if environ is None else environ
-    override = env.get(DATA_DIR_ENV, "").strip()
-    if override:
-        return Path(override).expanduser().resolve()
     frozen = is_frozen() if frozen is None else frozen
     if not frozen:
         root = SOURCE_ROOT if source_root is None else Path(source_root)
         return root / "data"
 
+    env = os.environ if environ is None else environ
+    override = env.get(DATA_DIR_ENV, "").strip()
     platform = sys.platform if platform is None else platform
     home = Path.home() if home is None else Path(home)
-    if platform == "win32":
+    if override:
+        root = Path(override).expanduser()
+    elif platform == "win32":
         base = (
             Path(env["LOCALAPPDATA"])
             if env.get("LOCALAPPDATA")
             else home / "AppData" / "Local"
         )
-        return base / "EVC-Lab" / "StroopEfficacyLearning" / "data"
-    if platform == "darwin":
-        return (
+        root = base / "EVC-Lab" / "StroopEfficacyLearning" / "data"
+    elif platform == "darwin":
+        root = (
             home
             / "Library"
             / "Application Support"
@@ -85,12 +93,18 @@ def default_archive_root(
             / "StroopEfficacyLearning"
             / "data"
         )
-    base = (
-        Path(env["XDG_DATA_HOME"])
-        if env.get("XDG_DATA_HOME")
-        else home / ".local" / "share"
-    )
-    return base / "EVC-Lab" / "stroop-efficacy-learning" / "data"
+    else:
+        base = (
+            Path(env["XDG_DATA_HOME"])
+            if env.get("XDG_DATA_HOME")
+            else home / ".local" / "share"
+        )
+        root = base / "EVC-Lab" / "stroop-efficacy-learning" / "data"
+
+    root = root.resolve()
+    if root.is_relative_to(executable_root()):
+        raise RuntimeError(f"数据目录不能位于程序目录内：{root}")
+    return root
 
 
 def display_version(entrypoint):
@@ -104,27 +118,16 @@ def display_version(entrypoint):
     return commit if commit != "unknown" else f"入口 SHA-256 {entry_hash[:12]}"
 
 
-def standalone_smoke_test(entrypoint, report_path=None):
+def standalone_smoke_test(report_path=None):
     """在不打开实验窗口的情况下验证独立包、版本记录和数据目录。"""
     result = {"status": "failed"}
     try:
         if not is_frozen():
             raise RuntimeError("启动自检只适用于 PyInstaller 独立包。")
         info = bundled_build_info(required=True)
-        from .session_data import code_version
-
-        commit, entry_hash, module_hashes = code_version(entrypoint)
-        if commit != info["source_commit"]:
-            raise RuntimeError("运行时代码版本与嵌入的源码提交不一致。")
-        if entry_hash != info["entrypoint_sha256"]:
-            raise RuntimeError("运行时入口摘要与构建记录不一致。")
-        if module_hashes != info["module_sha256"]:
-            raise RuntimeError("运行时模块摘要与构建记录不一致。")
-
+        with Path(sys.executable).open("rb") as executable:
+            executable_sha256 = hashlib.file_digest(executable, "sha256").hexdigest()
         root = default_archive_root()
-        program_root = executable_root()
-        if root == program_root or program_root in root.parents:
-            raise RuntimeError(f"数据目录不能位于程序目录内：{root}")
         root.mkdir(parents=True, exist_ok=True)
         with TemporaryFile(dir=root) as probe:
             probe.write(b"standalone-smoke-test")
@@ -132,7 +135,10 @@ def standalone_smoke_test(entrypoint, report_path=None):
         result = {
             "status": "ok",
             "bundle_version": info["bundle_version"],
-            "source_commit": commit,
+            "source_commit": info["source_commit"],
+            "entrypoint_sha256": info["entrypoint_sha256"],
+            "module_sha256": info["module_sha256"],
+            "executable_sha256": executable_sha256,
             "archive_root": str(root),
             "psychopy_version": info.get("psychopy_version", "unknown"),
         }

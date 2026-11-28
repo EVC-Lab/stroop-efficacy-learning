@@ -1,13 +1,13 @@
 # 独立版发布机制
 
-Pull request、`main` 推送和手动 CI 都会在四种目标 runner 上构建独立版并运行启动自检；这些检查不会把程序包发布为 Release 附件。只有发布标签符合 `standalone-vX.Y.Z` 的 GitHub Release，成功构建后才会把各平台包和 SHA-256 文件上传到该 Release。预发布可使用 `standalone-vX.Y.Z-rc.1` 这类标签。
+Pull request、`main` 推送和手动 CI 会在四种目标 runner 上构建并测试独立版。若发布采用 `standalone-vX.Y.Z` 或 `standalone-vX.Y.Z-rc.N` 标签的 GitHub Release，四个平台的压缩包均通过解压自检后才上传程序包和 SHA-256 文件。
 
 ## 发布步骤
 
 1. 在 `main` 合并已通过常规测试的代码，并完成该版本要求的预测试和设备验收。独立版不替代 Issue #7 的协议锁定。
 2. 确定版本号后，以目标提交创建并发布 GitHub Release，标签使用 `standalone-v1.0.0` 这样的格式。不要复用或移动已经发布的标签。
-3. `Standalone package build and release` 工作流从该标签检出同一提交，安装 `packaging/requirements-standalone.txt` 中锁定的依赖，分别构建并运行启动自检。PR 和 `main` CI 使用相同矩阵与构建步骤，提前检查四个平台能否产出可启动的程序。
-4. 四个平台任务全部成功后，工作流把压缩包和对应 SHA-256 文件上传到原 Release。任一平台失败时，发布附件步骤不会执行；可在修复后重新运行失败任务，或按项目决策发布新版本。
+3. `Standalone package build and release` 工作流从该标签检出同一提交，安装 `packaging/requirements-standalone.txt` 中锁定的依赖，分别构建压缩包，解压后再次运行启动自检。PR 和 `main` CI 使用相同矩阵。Linux CI 在 Xvfb 中收集图形模块并验证程序启动。
+4. 四个平台任务全部成功后，工作流把压缩包和对应 SHA-256 文件上传到原 Release。任一平台失败时，发布附件步骤会跳过。临时 runner 故障可重跑失败任务。改动源码或工作流后，应使用新版本标签发布包含修复的提交。
 5. 下载目标平台包，核对 SHA-256，并在实际采集设备完成下述人工验收后才投入使用。
 
 自动生成的目标为：
@@ -24,8 +24,8 @@ Pull request、`main` 推送和手动 CI 都会在四种目标 runner 上构建�
 ## 源码适配
 
 - `stroop_efficacy/runtime.py` 区分源码／Studio 与 PyInstaller 运行，读取包内 `build-info.json`，并解析持久数据目录。
-- `run.py --standalone-smoke-test` 在不打开实验窗口的情况下检查构建信息、代码摘要和数据目录可写状态。构建脚本自动执行此检查。
-- `packaging/build_standalone.py` 强制要求 `--tag` 或 `--version`，拒绝生成无版本包；同时要求源码来自干净、可识别的 Git 提交。
+- `run.py --standalone-smoke-test` 读取嵌入的构建信息，计算当前可执行文件的 SHA-256 并测试数据目录能否写入。构建脚本把解压后实际运行的文件摘要与归档前的程序比较，同时核对源码版本记录和符号链接。
+- `packaging/build_standalone.py` 强制要求 `--tag` 或 `--version`，拒绝生成无版本包；同时要求工作树来自干净、可识别的 Git 提交。使用 `--output-root` 时，可指定仓库之外或已被 Git 忽略的输出目录。
 - 构建记录包含发布版本、源码提交、入口与模块 SHA-256、Python／PsychoPy／PyInstaller 版本、目标平台和构建时间。包外也附一份供核对。
 - `packaging/standalone-README.txt` 是包内的 `START-HERE.txt`，说明启动、数据位置和验收限制。
 
