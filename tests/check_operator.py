@@ -172,6 +172,10 @@ def verify_archive(root):
         (unlinked,) = meta["异常未关联试次"]
         assert unlinked["阶段"] == phase and unlinked["区段"] == 1
         assert unlinked["反应键"] == "d" and unlinked["会话编号"] == entry.session_id
+        for key in ("正式刺激呈现计数", "正式刺激作答计数"):
+            assert sum(sum(words.values()) for words in meta[key].values()) == int(
+                phase == "main"
+            )
     entries = archive.list_sessions(root, CODE.lower())
     assert len({entry.session_id for entry in entries}) == 4
     assert archive.list_sessions(root, "QA-OTHER") == []

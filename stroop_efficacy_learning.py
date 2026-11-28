@@ -228,7 +228,7 @@ class StroopEfficacyExp:
         main_rows = [r for r in self.rows_intervals if r["阶段"] == "main"]
         scored_rows = [r for r in main_rows if r["区段得分"] != ""]
         scores = [r["区段得分"] for r in scored_rows]
-        main_trials = [r for r in trials if r["阶段"] == "main"]
+        main_trials = [r for r in self.rows_trials if r["阶段"] == "main"]
         inks = tuple(self.settings["KEYS"])
         words = tuple(self.settings["WORD"].values())
         meta = dict(
