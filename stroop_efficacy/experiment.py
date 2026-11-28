@@ -1,24 +1,19 @@
-# -*- coding: utf-8 -*-
-"""色词 Stroop 行为任务，结合研究一的刺激与研究二的区段流程。
-
-用 PsychoPy Studio 的 Coder 运行本文件。流程及快跑设置见 README。
-"""
+"""色词 Stroop 的被试界面、作答、计分和区段流程。"""
 
 import random
 import statistics
-import traceback
+from contextlib import ExitStack
 from datetime import datetime
 from math import isfinite
 from pathlib import Path
 from uuid import uuid4
 
-from psychopy import visual, core, event, gui
+from psychopy import visual, core, event
 from psychopy import logging as psylog
 
-from stroop_efficacy.archive import MODES, participant_code, performance_first
-from stroop_efficacy.design import CFG, YokeWindow, make_main_schedule, run_settings
-from stroop_efficacy.operator_ui import ask_registration, show_session_result
-from stroop_efficacy.session_data import (
+from .archive import MODES, participant_code, performance_first
+from .design import CFG, YokeWindow, make_main_schedule, run_settings
+from .session_data import (
     EXPORT_VERSION,
     code_version,
     parameter_hash,
@@ -26,7 +21,7 @@ from stroop_efficacy.session_data import (
     trial_response_fields,
     write_snapshot,
 )
-from stroop_efficacy.timing import TimedInput, open_timed_keyboard, resolve_frame_timing
+from .timing import TimedInput, open_timed_keyboard, resolve_frame_timing
 
 try:  # 老接口优先：event.Mouse 方法齐全（getPressed / getPos），新版 PsychoPy 仍提供
     MouseClass = event.Mouse
@@ -54,7 +49,9 @@ def mouse_left_pressed(mouse):
 
 
 class StroopEfficacyExp:
-    def __init__(self, info, keyboard=None, *, mode=None, archive_root=None):
+    def __init__(
+        self, info, keyboard=None, *, entrypoint, mode=None, archive_root=None
+    ):
         self.outdir = None
         self.session_id = uuid4().hex
         self.mode = (
@@ -65,29 +62,49 @@ class StroopEfficacyExp:
         self.settings = (
             CFG if mode is None and self.mode == "pilot" else run_settings(self.mode)
         )
+        entrypoint = Path(entrypoint).resolve()
         self.archive_root = (
             Path(archive_root)
             if archive_root is not None
-            else Path(__file__).resolve().parent / "data"
+            else entrypoint.parent / "data"
         )
         self.started_at = datetime.now().astimezone().isoformat(timespec="seconds")
         self.finished_at = ""
         self.session_status = "running"
         self.update_info(info)
-        self.code_commit, self.script_hash, self.module_hashes = code_version(__file__)
-
-        keyboard = open_timed_keyboard() if keyboard is None else keyboard
-        self.timed_input = TimedInput(keyboard)
-
-        self.win = visual.Window(
-            size=(1280, 800),
-            fullscr=self.settings["FULLSCR"],
-            color=self.settings["BG_COLOR"],
-            units="height",
-            allowGUI=False,
-            checkTiming=False,
-            waitBlanking=True,
+        self.code_commit, self.script_hash, self.module_hashes = code_version(
+            entrypoint
         )
+
+        # 初始化失败时，关闭已接管的资源。成功后由场次启动方正常收尾。
+        with ExitStack() as cleanup:
+            if keyboard is None:
+                keyboard = open_timed_keyboard()
+                cleanup.callback(keyboard.stop)
+            self.timed_input = TimedInput(keyboard)
+            self.win = visual.Window(
+                size=(1280, 800),
+                fullscr=self.settings["FULLSCR"],
+                color=self.settings["BG_COLOR"],
+                units="height",
+                allowGUI=False,
+                checkTiming=False,
+                waitBlanking=True,
+            )
+            cleanup.callback(self.win.close)
+            self._initialize_window()
+
+            self.response_keys = [*self.settings["KEYS"].values(), "escape"]
+            self.yoke = YokeWindow(
+                self.settings["YOKE_WINDOW"], self.settings["YOKE_INIT_SCORES"]
+            )
+            self.total_score = 0.0
+            self.rows_trials = []
+            self.rows_intervals = []
+            self.rows_probes = []
+            cleanup.pop_all()
+
+    def _initialize_window(self):
         self.win.setMouseVisible(False)
         measured_hz = self.win.getActualFrameRate(
             infoMsg="正在测量显示器刷新率，请稍候"
@@ -177,16 +194,6 @@ class StroopEfficacyExp:
         self.probe_num = visual.TextStim(
             self.win, "", font=f, color=(1, 1, 1), height=0.04, pos=(0, 0.10)
         )
-
-        # ---- 运行时状态 ----
-        self.response_keys = [*self.settings["KEYS"].values(), "escape"]
-        self.yoke = YokeWindow(
-            self.settings["YOKE_WINDOW"], self.settings["YOKE_INIT_SCORES"]
-        )
-        self.total_score = 0.0
-        self.rows_trials = []
-        self.rows_intervals = []
-        self.rows_probes = []
 
     # -------------------------------------------------------------- 被试信息
     def update_info(self, info):
@@ -792,66 +799,3 @@ class StroopEfficacyExp:
             % int(round(self.total_score)),
             height=0.045,
         )
-
-
-def run_registered(info, mode, archive_root, keyboard):
-    """从已确认的登记运行一场，退出全屏后显示保存结果。"""
-    exp = None
-    save_failed = False
-    error = None
-    try:
-        exp = StroopEfficacyExp(
-            info, keyboard=keyboard, mode=mode, archive_root=archive_root
-        )
-        exp.run()
-    except SystemExit:
-        pass
-    except (Exception, KeyboardInterrupt) as exc:
-        error = exc
-        if exp is not None:
-            try:
-                exp.finish("error")
-            except (Exception, KeyboardInterrupt):
-                save_failed = True
-                traceback.print_exc()
-        if exp is not None and exp.outdir is not None:
-            try:
-                log = "".join(
-                    traceback.format_exception(type(exc), exc, exc.__traceback__)
-                )
-                (exp.outdir / "error.log").write_text(log, encoding="utf-8")
-            except OSError:
-                traceback.print_exc()
-    finally:
-        keyboard.stop()
-        if exp is not None:
-            exp.win.close()
-    show_session_result(
-        exp.outdir if exp is not None else None,
-        exp.subj if exp is not None else info["被试编号"],
-        mode,
-        save_failed,
-    )
-    if error is not None:
-        raise error
-
-
-def main():
-    root = Path(__file__).resolve().parent / "data"
-    registration = ask_registration(root)
-    if registration is None:
-        return
-    try:
-        keyboard = open_timed_keyboard()
-    except (ImportError, OSError, RuntimeError) as exc:
-        dialog = gui.Dlg(title="无法初始化实验键盘")
-        dialog.addText("请在 PsychoPy Studio 中检查 Psychtoolbox 键盘后端。")
-        dialog.addText(str(exc))
-        dialog.show()
-        return
-    info, mode = registration
-    run_registered(info, mode, root, keyboard)
-
-
-if __name__ == "__main__":
-    main()

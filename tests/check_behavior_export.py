@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from check_timing import ScriptedKeyboard, VirtualClock, VirtualStim, task
+from run import ENTRYPOINT
 from stroop_efficacy import session_data
 
 
@@ -112,11 +113,16 @@ def verify_export(tmpdir):
         )
         root = tmpdir / "data"
         exp = task.StroopEfficacyExp(
-            info, keyboard=keyboard, mode="pilot", archive_root=root
+            info,
+            keyboard=keyboard,
+            entrypoint=ENTRYPOINT,
+            mode="pilot",
+            archive_root=root,
         )
         rerun = task.StroopEfficacyExp(
             info,
             keyboard=ScriptedKeyboard(clock.getTime),
+            entrypoint=ENTRYPOINT,
             mode="pilot",
             archive_root=root,
         )
@@ -135,7 +141,18 @@ def verify_export(tmpdir):
         assert (
             exp.outdir.parent == rerun.outdir.parent == root / "pilot" / "QA-EXPORT-01"
         )
-        assert len(first_meta["脚本SHA256"]) == 64 and first_meta["正式调度"]["版本"]
+        assert (
+            first_meta["脚本SHA256"]
+            == hashlib.sha256(ENTRYPOINT.read_bytes()).hexdigest()
+        )
+        for filename in ("stroop_efficacy/experiment.py", "ui/operator.py"):
+            assert (
+                first_meta["模块SHA256"][filename]
+                == hashlib.sha256(
+                    (ENTRYPOINT.parent / filename).read_bytes()
+                ).hexdigest()
+            )
+        assert first_meta["正式调度"]["版本"]
 
         present = exp._present_target
 

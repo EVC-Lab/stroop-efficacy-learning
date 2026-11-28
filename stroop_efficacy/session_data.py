@@ -116,7 +116,12 @@ def parameter_hash(settings):
 def code_version(entrypoint):
     """记录入口及模块的摘要，离开 Git 仓库也可核对运行版本。"""
     path = Path(entrypoint).resolve()
-    modules = sorted(Path(__file__).resolve().parent.glob("*.py"))
+    task_directory = Path(__file__).resolve().parent
+    modules = sorted(
+        module
+        for directory in (task_directory, task_directory.parent / "ui")
+        for module in directory.glob("*.py")
+    )
     source_paths = [path, *modules]
     hashes = {
         p.relative_to(path.parent).as_posix(): hashlib.sha256(
