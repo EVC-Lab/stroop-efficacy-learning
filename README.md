@@ -4,7 +4,7 @@
 
 ## 在 PsychoPy Studio 运行
 
-在 PsychoPy Studio 打开 **Coder**，打开仓库根目录的 [stroop_efficacy_learning.py](stroop_efficacy_learning.py)，点击 **Run**。保留主脚本旁的 `stroop_efficacy/`。在实验员登记页填写参与者编码、选择模式，核对序列和保存位置后启动。任务中可按 Esc 退出并保存已有记录。
+在 PsychoPy Studio 打开 **Coder**，打开仓库根目录的 [run_stroop_efficacy.py](run_stroop_efficacy.py)，点击 **Run**。保留主脚本旁的 `stroop_efficacy/`。在实验员登记页填写参与者编码、选择模式，核对序列和保存位置后启动。任务中可按 Esc 退出并保存已有记录。
 
 - **快跑**以窗口模式运行 12 个区段，单段作答窗口为 1 秒。
 - **预测试**和**正式采集**均以全屏运行三段练习和 288 个正式区段，归档目录按模式区分。采集版本将在[路线图](https://github.com/EVC-Lab/stroop-efficacy-learning/issues/8)中的验收完成后锁定。

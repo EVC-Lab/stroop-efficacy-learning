@@ -20,7 +20,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import stroop_efficacy_learning as task
+import run_stroop_efficacy as task
 from stroop_efficacy import session_data
 
 

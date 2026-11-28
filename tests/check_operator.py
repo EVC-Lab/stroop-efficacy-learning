@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import stroop_efficacy_learning as task  # noqa: E402
+import run_stroop_efficacy as task  # noqa: E402
 from check_timing import ScriptedKeyboard, VirtualClock, VirtualStim  # noqa: E402
 from stroop_efficacy import archive, operator_ui  # noqa: E402
 from stroop_efficacy.design import run_settings  # noqa: E402

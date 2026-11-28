@@ -37,13 +37,13 @@ jobs:
         run: python -m pip install "psychopy==2026.2.5" "ruff==0.15.11"
 
       - name: Check Python formatting
-        run: python -m ruff format --check stroop_efficacy_learning.py stroop_efficacy tests
+        run: python -m ruff format --check run_stroop_efficacy.py stroop_efficacy tests
 
       - name: Check Python syntax and lint
         run: |
-          python -m compileall -q stroop_efficacy_learning.py stroop_efficacy tests
+          python -m compileall -q run_stroop_efficacy.py stroop_efficacy tests
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -m ruff check --select E9,F63,F7,F82 stroop_efficacy_learning.py stroop_efficacy tests
+          python -m ruff check --select E9,F63,F7,F82 run_stroop_efficacy.py stroop_efficacy tests
 
       - name: Test virtual timing (250 ms ISI)
         run: python tests/check_timing.py --isi 0.25
