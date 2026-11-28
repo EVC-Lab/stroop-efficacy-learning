@@ -62,7 +62,9 @@ class StroopEfficacyExp:
         )
         if self.mode not in MODES:
             raise ValueError("无法识别运行模式。")
-        self.settings = CFG if mode is None else run_settings(mode)
+        self.settings = (
+            CFG if mode is None and self.mode == "pilot" else run_settings(self.mode)
+        )
         self.archive_root = (
             Path(archive_root)
             if archive_root is not None
@@ -210,10 +212,23 @@ class StroopEfficacyExp:
     def save(self, verbose=False):
         if self.outdir is None:
             self.outdir = self._make_outdir()
+        trials = self.rows_trials
+        orphan_trials = []
+        if self.session_status == "error":
+            saved_intervals = {
+                (row["阶段"], row["区段"]) for row in self.rows_intervals
+            }
+            trials = []
+            for row in self.rows_trials:
+                key = row["阶段"], row["区段"]
+                if row["阶段"] in {"main", "prac3"} and key not in saved_intervals:
+                    orphan_trials.append(row)
+                else:
+                    trials.append(row)
         main_rows = [r for r in self.rows_intervals if r["阶段"] == "main"]
         scored_rows = [r for r in main_rows if r["区段得分"] != ""]
         scores = [r["区段得分"] for r in scored_rows]
-        main_trials = [r for r in self.rows_trials if r["阶段"] == "main"]
+        main_trials = [r for r in trials if r["阶段"] == "main"]
         inks = tuple(self.settings["KEYS"])
         words = tuple(self.settings["WORD"].values())
         meta = dict(
@@ -231,7 +246,9 @@ class StroopEfficacyExp:
             区段数=len(scored_rows),
             中断区段数=sum(bool(r["中断阶段"]) for r in main_rows),
             完整区段数=sum(r["区段状态"] == "completed" for r in main_rows),
-            总分=round(self.total_score, 1),
+            总分=round(
+                sum(scores) if self.session_status == "error" else self.total_score, 1
+            ),
             平均每区段得分=(round(statistics.mean(scores), 2) if scores else ""),
             平均每区段试次数=(
                 round(statistics.mean([r["试次数"] for r in scored_rows]), 2)
@@ -255,9 +272,11 @@ class StroopEfficacyExp:
             实测刷新率Hz=self.refresh_hz,
             出题估计帧长s=self.frame_period,
         )
+        if orphan_trials:
+            meta["异常未关联试次"] = orphan_trials
         tables = (
             ("intervals.csv", self.rows_intervals),
-            ("trials.csv", self.rows_trials),
+            ("trials.csv", trials),
             ("probes.csv", self.rows_probes),
         )
         write_snapshot(self.outdir, tables, meta)
@@ -292,7 +311,7 @@ class StroopEfficacyExp:
         self.finished_at = datetime.now().astimezone().isoformat(timespec="seconds")
         try:
             self.save(verbose=True)
-        except Exception:
+        except (Exception, KeyboardInterrupt):
             self.session_status, self.finished_at = previous
             raise
 
@@ -792,7 +811,7 @@ def run_registered(info, mode, archive_root, keyboard):
         if exp is not None:
             try:
                 exp.finish("error")
-            except Exception:
+            except (Exception, KeyboardInterrupt):
                 save_failed = True
                 traceback.print_exc()
         if exp is not None and exp.outdir is not None:

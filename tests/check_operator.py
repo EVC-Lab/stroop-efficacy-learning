@@ -85,7 +85,21 @@ def verify_archive(root):
         if message.startswith("实验结束"):
             raise RuntimeError("final screen failure")
 
+    def fail_in_interval(exp):
+        exp.save()
+        phase = "prac3" if exp.subj.endswith("-PRACTICE") else "main"
+
+        def respond(*_args):
+            if exp.rows_trials:
+                raise KeyboardInterrupt("response wait interrupted")
+            clock.wait(0.10)
+            return "d", clock.getTime(), None
+
+        with patch.object(exp.timed_input, "wait_for_response", respond):
+            exp.run_interval(0, 2.0, "performance", phase=phase)
+
     end_failure_code = "QA-END-FAIL"
+    partial_codes = ("QA-PARTIAL-MAIN", "QA-PARTIAL-PRACTICE")
     with (
         patch.object(task, "visual", visual),
         patch.object(task.psylog, "defaultClock", clock),
@@ -95,6 +109,21 @@ def verify_archive(root):
         patch.object(task, "MouseClass", return_value=mouse),
         patch.object(task, "show_session_result") as result,
     ):
+        with patch.dict(task.CFG, {"DEBUG_FAST": True}):
+            inferred = task.StroopEfficacyExp(
+                INFO, keyboard=keyboard, archive_root=root
+            )
+        assert (
+            inferred.mode == "quick" and inferred.main_schedule.windows == (1.0,) * 12
+        )
+        inferred.win.close()
+        with patch.object(inferred, "save", side_effect=KeyboardInterrupt):
+            try:
+                inferred.finish("completed")
+            except KeyboardInterrupt:
+                assert inferred.session_status == "running" and not inferred.finished_at
+            else:
+                raise AssertionError("Terminal save interrupt was swallowed")
         with patch.object(task.StroopEfficacyExp, "wait_space", return_value=None):
             task.run_registered(INFO, "quick", root, keyboard)
         with patch.object(task.StroopEfficacyExp, "wait_space", interrupted):
@@ -120,10 +149,29 @@ def verify_archive(root):
                 assert str(exc) == "final screen failure"
             else:
                 raise AssertionError("Final screen exception was swallowed")
-    assert window_sizes == [False, True, True, True, False]
-    assert result.call_count == len(closed_windows) == 5
+        with patch.object(task.StroopEfficacyExp, "run", fail_in_interval):
+            for code in partial_codes:
+                try:
+                    task.run_registered(
+                        {**INFO, "被试编号": code}, "formal", root, keyboard
+                    )
+                except KeyboardInterrupt as exc:
+                    assert str(exc) == "response wait interrupted"
+                else:
+                    raise AssertionError("Interval exception was swallowed")
+    assert window_sizes == [False, False, True, True, True, False, True, True]
+    assert result.call_count == 7 and len(closed_windows) == 8
     (end_failure,) = archive.list_sessions(root, end_failure_code)
     assert end_failure.status == "error" and end_failure.completed == 12
+    for code, phase in zip(partial_codes, ("main", "prac3")):
+        (entry,) = archive.list_sessions(root, code)
+        meta, recovered = read_session_snapshot(entry.path)
+        assert not recovered and entry.status == "error" and entry.completed == 0
+        assert meta["数据表"]["trials.csv"]["行数"] == 0
+        assert meta["数据表"]["intervals.csv"]["行数"] == 0
+        (unlinked,) = meta["异常未关联试次"]
+        assert unlinked["阶段"] == phase and unlinked["区段"] == 1
+        assert unlinked["反应键"] == "d" and unlinked["会话编号"] == entry.session_id
     entries = archive.list_sessions(root, CODE.lower())
     assert len({entry.session_id for entry in entries}) == 4
     assert archive.list_sessions(root, "QA-OTHER") == []
