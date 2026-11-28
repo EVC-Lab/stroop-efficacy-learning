@@ -82,10 +82,12 @@ class StroopEfficacyExp:
             CFG if mode is None and self.mode == "pilot" else run_settings(self.mode)
         )
         entrypoint = Path(entrypoint).resolve()
+        from .runtime import bundled_build_info, default_archive_root
+
+        self.build_info = bundled_build_info(required=True)
+
         self.archive_root = (
-            Path(archive_root)
-            if archive_root is not None
-            else entrypoint.parent / "data"
+            Path(archive_root) if archive_root is not None else default_archive_root()
         )
         self.started_at = datetime.now().astimezone().isoformat(timespec="seconds")
         self.finished_at = ""
@@ -293,7 +295,13 @@ class StroopEfficacyExp:
             正式刺激作答计数=stimulus_counts(
                 (r for r in main_trials if r["反应键"]), inks, words
             ),
-            版本="stroop-efficacy-dev",
+            版本=(
+                f"stroop-efficacy-standalone-{self.build_info['bundle_version']}"
+                if self.build_info
+                else "stroop-efficacy-dev"
+            ),
+            运行形态=("standalone" if self.build_info else "source"),
+            独立版构建信息=(self.build_info or ""),
             代码版本=self.code_commit,
             脚本SHA256=self.script_hash,
             模块SHA256=self.module_hashes,

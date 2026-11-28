@@ -115,6 +115,16 @@ def parameter_hash(settings):
 
 def code_version(entrypoint):
     """记录入口及模块的摘要，离开 Git 仓库也可核对运行版本。"""
+    from .runtime import bundled_build_info
+
+    build_info = bundled_build_info()
+    if build_info is not None:
+        return (
+            build_info["source_commit"],
+            build_info["entrypoint_sha256"],
+            build_info["module_sha256"],
+        )
+
     path = Path(entrypoint).resolve()
     task_directory = Path(__file__).resolve().parent
     modules = sorted(

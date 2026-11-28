@@ -54,6 +54,9 @@ jobs:
       - name: Verify synthetic behavior exports and joins
         run: python tests/check_behavior_export.py
 
+      - name: Verify standalone release metadata and paths
+        run: python tests/check_standalone.py
+
       - name: Verify operator window and session archive
         env:
           QT_QPA_PLATFORM: offscreen

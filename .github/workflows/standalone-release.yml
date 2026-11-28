@@ -1,0 +1,98 @@
+name: Standalone release
+
+# 只有明确版本的 GitHub Release 触发打包；push 和 PR 不生成独立包。
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: standalone-release-${{ github.event.release.id }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: ${{ matrix.platform_tag }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            platform_tag: windows-x64
+          - os: ubuntu-24.04
+            platform_tag: linux-x64
+          - os: macos-15
+            platform_tag: macos-arm64
+          - os: macos-15-intel
+            platform_tag: macos-x64
+    env:
+      PYTHONUTF8: "1"
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: packaging/requirements-standalone.txt
+
+      - name: Install Linux runtime libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1-mesa-dev libglu1-mesa-dev libasound2-dev portaudio19-dev \
+            libxkbcommon-x11-0 libxcb-cursor0 libxcb-xinerama0 \
+            libxcb-icccm4 libxcb-keysyms1
+
+      - name: Install pinned build dependencies
+        run: python -m pip install -r packaging/requirements-standalone.txt
+
+      - name: Validate release tag
+        run: python packaging/build_standalone.py --tag "$RELEASE_TAG" --validate-tag
+        shell: bash
+
+      - name: Build and smoke test standalone package
+        run: python packaging/build_standalone.py --tag "$RELEASE_TAG" --platform-tag "${{ matrix.platform_tag }}"
+        shell: bash
+
+      - name: Upload release candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: standalone-${{ matrix.platform_tag }}
+          path: |
+            dist/package/*.zip
+            dist/package/*.tar.gz
+            dist/package/*.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Attach all packages to release
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - name: Download verified platform packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: standalone-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Attach packages and checksums
+        run: gh release upload "$RELEASE_TAG" release-assets/* --clobber
