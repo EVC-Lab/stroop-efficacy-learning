@@ -13,7 +13,11 @@ import stroop_efficacy_learning as task  # noqa: E402
 from check_timing import ScriptedKeyboard, VirtualClock, VirtualStim  # noqa: E402
 from stroop_efficacy import archive, operator_ui  # noqa: E402
 from stroop_efficacy.design import run_settings  # noqa: E402
-from stroop_efficacy.session_data import read_session_snapshot  # noqa: E402
+from stroop_efficacy.session_data import (  # noqa: E402
+    TABLE_FIELDS,
+    read_session_snapshot,
+    write_snapshot,
+)
 
 
 CODE = "QA-SESSION-02"
@@ -77,6 +81,11 @@ def verify_archive(root):
     def interrupted(exp, *_args, **_kwargs):
         exp.abort()
 
+    def fail_on_end(_exp, message, **_kwargs):
+        if message.startswith("实验结束"):
+            raise RuntimeError("final screen failure")
+
+    end_failure_code = "QA-END-FAIL"
     with (
         patch.object(task, "visual", visual),
         patch.object(task.psylog, "defaultClock", clock),
@@ -102,8 +111,19 @@ def verify_archive(root):
                 assert str(exc) == "control failure"
             else:
                 raise AssertionError("Run exception was swallowed")
-    assert window_sizes == [False, True, True, True]
-    assert result.call_count == len(closed_windows) == 4
+        with patch.object(task.StroopEfficacyExp, "wait_space", fail_on_end):
+            try:
+                task.run_registered(
+                    {**INFO, "被试编号": end_failure_code}, "quick", root, keyboard
+                )
+            except RuntimeError as exc:
+                assert str(exc) == "final screen failure"
+            else:
+                raise AssertionError("Final screen exception was swallowed")
+    assert window_sizes == [False, True, True, True, False]
+    assert result.call_count == len(closed_windows) == 5
+    (end_failure,) = archive.list_sessions(root, end_failure_code)
+    assert end_failure.status == "error" and end_failure.completed == 12
     entries = archive.list_sessions(root, CODE.lower())
     assert len({entry.session_id for entry in entries}) == 4
     assert archive.list_sessions(root, "QA-OTHER") == []
@@ -132,6 +152,28 @@ def verify_archive(root):
     )
     prior = archive.list_sessions(root, CODE)[-1]
     assert (prior.mode, prior.status, prior.completed) == ("legacy", "legacy", 2)
+
+    other = "QA-TIMEZONE"
+    for session_id, start in (
+        ("1", "2026-11-01T01:59:00-04:00"),
+        ("2", "2026-11-01T01:00:00-05:00"),
+    ):
+        entry = root / "pilot" / other / session_id
+        entry.mkdir(parents=True)
+        write_snapshot(
+            entry,
+            [(name, []) for name in TABLE_FIELDS],
+            dict(
+                会话编号=session_id,
+                被试编号=other,
+                运行模式="pilot",
+                会话开始时间=start,
+            ),
+        )
+    assert [entry.session_id for entry in archive.list_sessions(root, other)] == [
+        "2",
+        "1",
+    ]
 
 
 def verify_studio_dialogs(root):

@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 from collections import Counter
+from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from zipfile import BadZipFile, ZipFile
@@ -156,17 +157,33 @@ def stimulus_counts(rows, inks, words):
 
 
 def checked_snapshot(read_file):
-    """只返回元数据和三个 CSV 摘要一致的快照。"""
+    """校验三个 CSV 的摘要、表头和记录数。"""
     try:
         files = {"meta.json": read_file("meta.json")}
         meta = json.loads(files["meta.json"])
-        for name in TABLE_FIELDS:
+        for name, fields in TABLE_FIELDS.items():
             contents = read_file(name)
-            if hashlib.sha256(contents).hexdigest() != meta["数据表"][name]["SHA256"]:
+            summary = meta["数据表"][name]
+            if hashlib.sha256(contents).hexdigest() != summary["SHA256"]:
                 return None
+            with StringIO(contents.decode("utf-8-sig"), newline="") as stream:
+                reader = csv.reader(stream, strict=True)
+                if (
+                    tuple(next(reader, ())) != fields
+                    or sum(1 for _ in reader) != summary["行数"]
+                ):
+                    return None
             files[name] = contents
         return meta, files
-    except (OSError, ValueError, TypeError, KeyError, RuntimeError, BadZipFile):
+    except (
+        OSError,
+        ValueError,
+        TypeError,
+        KeyError,
+        RuntimeError,
+        BadZipFile,
+        csv.Error,
+    ):
         return None
 
 

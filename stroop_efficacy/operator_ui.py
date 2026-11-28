@@ -120,7 +120,7 @@ def ask_registration(root):
         mode_field.addItem(label, mode)
     direction_field = QtWidgets.QComboBox()
     direction_field.setObjectName("sequence_assignment")
-    direction_field.addItem("自动（按编号末位数字）", "自动")
+    direction_field.addItem("自动（按编号最后一个数字）", "自动")
     direction_field.addItem("手动指定 A", "正向")
     direction_field.addItem("手动指定 B", "反向")
     detail = plain_label("")

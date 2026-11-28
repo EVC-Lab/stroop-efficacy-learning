@@ -3,6 +3,7 @@
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .session_data import read_session_snapshot
@@ -66,14 +67,16 @@ def describe_session(directory, code, mode):
         status = "recovery"
     else:
         status = meta.get("会话状态", "unverified")
+        if not isinstance(status, str) or status not in STATUS:
+            status = "unverified"
     return ArchiveEntry(
         code,
         mode,
         directory.name,
         status,
         meta.get("完整区段数", "—"),
-        meta.get("会话开始时间", ""),
-        meta.get("会话结束时间", "") if not recovered else "",
+        str(meta.get("会话开始时间") or ""),
+        str(meta.get("会话结束时间") or "") if not recovered else "",
         directory,
     )
 
@@ -119,6 +122,14 @@ def list_sessions(root, code=""):
                         directory,
                     )
                 )
-    return sorted(
-        entries, key=lambda entry: (entry.started_at, entry.session_id), reverse=True
-    )
+
+    def chronological_key(entry):
+        try:
+            stamp = datetime.fromisoformat(entry.started_at)
+            if stamp.tzinfo is not None:
+                return stamp.astimezone(timezone.utc), entry.session_id
+        except (ValueError, TypeError, OverflowError):
+            pass
+        return datetime.min.replace(tzinfo=timezone.utc), entry.session_id
+
+    return sorted(entries, key=chronological_key, reverse=True)

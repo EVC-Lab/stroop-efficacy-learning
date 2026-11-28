@@ -789,7 +789,7 @@ def run_registered(info, mode, archive_root, keyboard):
         pass
     except (Exception, KeyboardInterrupt) as exc:
         error = exc
-        if exp is not None and exp.session_status == "running":
+        if exp is not None:
             try:
                 exp.finish("error")
             except Exception:

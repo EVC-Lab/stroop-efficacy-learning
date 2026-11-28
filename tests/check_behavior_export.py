@@ -222,6 +222,17 @@ def verify_export(tmpdir):
         exp.save()
         check_joins(*read_snapshot(exp.outdir))
 
+        manifest = Path(exp.outdir) / "meta.json"
+        valid_manifest = manifest.read_bytes()
+        wrong_rows = json.loads(valid_manifest)
+        wrong_rows["数据表"]["trials.csv"]["行数"] += 1
+        manifest.write_text(json.dumps(wrong_rows), encoding="utf-8")
+        assert session_data.read_session_snapshot(Path(exp.outdir)) == (
+            first_meta,
+            True,
+        )
+        manifest.write_bytes(valid_manifest)
+
         with (
             scripted_targets(("escape", 0.30)),
             patch.object(task.core, "quit", side_effect=SystemExit),
