@@ -455,12 +455,11 @@ def check_interval_interruptions(exp):
                 patch.object(exp.win, "flip", flip),
                 patch.object(exp, "session_status", "running"),
                 patch.object(exp, "finished_at", ""),
-                patch.object(task.core, "quit", side_effect=SystemExit),
                 patch.dict(task.CFG, {"ISI_BETWEEN": 0.25}),
             ):
                 try:
                     exp.run_interval(36 + index, duration, "performance")
-                except SystemExit:
+                except task.SessionInterrupted:
                     assert exp.session_status == "interrupted" and exp.finished_at
                 else:
                     raise AssertionError(f"Esc did not interrupt during {case}")

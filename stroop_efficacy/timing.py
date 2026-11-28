@@ -8,7 +8,7 @@ from psychopy.hardware.keyboard import Keyboard
 
 
 def open_timed_keyboard():
-    # 登记对话框关闭、实验窗口就绪后再启动队列。区段内持续监听。
+    # 实验窗口就绪后再启动队列。区段内持续监听。
     keyboard = Keyboard(backend="ptb", waitForStart=True)
     if keyboard.getBackend() != "ptb":
         raise RuntimeError(
