@@ -18,3 +18,8 @@ error.log
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# ---- 独立版的本机构建产物（发布包只由 Release 工作流生成） ----
+build/
+dist/
+*.spec

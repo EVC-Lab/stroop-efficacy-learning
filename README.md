@@ -60,6 +60,10 @@ python tests/check_timing.py --ptb-keyboard --fullscreen
 
 [行为数据导出与分析说明](docs/behavior-analysis.md)包含字段、合表键、旧数据导入、反馈前模型预期和 DDM 筛选。真实被试数据保存在采集端。`data/` 已由 Git 忽略。
 
+## 独立版发布
+
+源码支持 PyInstaller 独立运行。PR、`main` 推送和手动 CI 会在 Windows、Linux、macOS Intel 与 Apple Silicon runner 上构建并运行启动自检；发布标签采用 `standalone-vX.Y.Z` 或 `standalone-vX.Y.Z-rc.N` 时，各平台构建与解压自检均通过后才上传程序包和 SHA-256 校验文件。独立版会话默认写入各操作系统的用户数据目录，升级程序不会覆盖既有场次，登记页显示实际保存位置。版本发布、包名、数据目录和设备验收边界见[独立版发布机制](docs/standalone-release.md)。
+
 可在 PsychoPy Studio 的 Python 环境运行 `python tests/check_operator.py --studio-ui`，使用合成数据复测登记、查询和重跑确认。
 
 迁入的研究一色词版本可从 [`v1.2`](https://gitee.com/evclab/stroop-efficacy-learning/tree/v1.2) 查阅。研究二水果版和原说明见 [`exp2-v1.0`](https://gitee.com/evclab/stroop-efficacy-learning/tree/exp2-v1.0)。

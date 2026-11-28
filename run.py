@@ -9,7 +9,6 @@ from tempfile import TemporaryFile
 
 from stroop_efficacy.device_check import check_devices
 from stroop_efficacy.experiment import SessionInterrupted, StroopEfficacyExp
-from stroop_efficacy.session_data import code_version
 from stroop_efficacy.timing import open_timed_keyboard
 from ui.operator import run_operator_panel
 
@@ -88,16 +87,27 @@ def start_session(info, mode, archive_root):
 
 def launch_experiment():
     """保持实验员窗口开启，直至实验员关闭。"""
-    root = ENTRYPOINT.parent / "data"
-    commit, entry_hash, _ = code_version(ENTRYPOINT)
-    version = commit if commit != "unknown" else f"入口 SHA-256 {entry_hash[:12]}"
+    from stroop_efficacy.runtime import default_archive_root, display_version
+
+    root = default_archive_root()
     run_operator_panel(
         root,
         start_session=partial(start_session, archive_root=root),
         check_devices=check_devices,
-        version=version,
+        version=display_version(ENTRYPOINT),
     )
 
 
-if __name__ == "__main__":
+def main():
+    import sys
+
+    if "--standalone-smoke-test" in sys.argv:
+        from stroop_efficacy.runtime import standalone_smoke_test
+
+        standalone_smoke_test()
+        return
     launch_experiment()
+
+
+if __name__ == "__main__":
+    main()
