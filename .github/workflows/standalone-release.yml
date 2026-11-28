@@ -1,7 +1,11 @@
-name: Standalone release
+name: Standalone package build and release
 
-# 只有明确版本的 GitHub Release 触发打包；push 和 PR 不生成独立包。
+# Pull request 和 main 推送都构建并自检所有平台；只有发布 Release 才上传附件。
 on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
   release:
     types: [published]
 
@@ -9,12 +13,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: standalone-release-${{ github.event.release.id }}
+  group: standalone-${{ github.event.release.id || github.event.pull_request.number || github.ref }}
   cancel-in-progress: false
 
 jobs:
   build:
-    name: ${{ matrix.platform_tag }}
+    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'standalone-v')
+    name: Build and smoke test (${{ matrix.platform_tag }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -31,12 +36,12 @@ jobs:
             platform_tag: macos-x64
     env:
       PYTHONUTF8: "1"
-      RELEASE_TAG: ${{ github.event.release.tag_name }}
+      RELEASE_TAG: ${{ github.event.release.tag_name || 'standalone-v0.0.0-ci.1' }}
     steps:
       - name: Check out release source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.event.release.tag_name || github.sha }}
           persist-credentials: false
 
       - name: Set up Python
@@ -67,6 +72,7 @@ jobs:
         shell: bash
 
       - name: Upload release candidate
+        if: github.event_name == 'release'
         uses: actions/upload-artifact@v4
         with:
           name: standalone-${{ matrix.platform_tag }}
@@ -79,6 +85,7 @@ jobs:
 
   publish:
     name: Attach all packages to release
+    if: github.event_name == 'release' && startsWith(github.event.release.tag_name, 'standalone-v')
     needs: build
     runs-on: ubuntu-24.04
     permissions:

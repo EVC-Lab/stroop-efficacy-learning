@@ -154,10 +154,18 @@ def build(version, platform_tag, root=ROOT, output_root=None):
     work = output_root / "work" / platform_tag
     dist = output_root / "pyinstaller" / platform_tag
     package = output_root / "package"
-    if output_root.exists():
-        shutil.rmtree(output_root)
+    suffix = ".tar.gz" if platform_tag.startswith("linux") else ".zip"
+    artifact = package / f"{APP_NAME}-{version}-{platform_tag}{suffix}"
+    staging = package / APP_NAME
+    for generated in (work, dist, staging):
+        if generated.exists():
+            shutil.rmtree(generated)
+    for generated in (artifact, artifact.with_name(artifact.name + ".sha256")):
+        if generated.exists():
+            generated.unlink()
     work.mkdir(parents=True)
     dist.mkdir(parents=True)
+    package.mkdir(parents=True, exist_ok=True)
 
     info = build_info(root, version)
     info_path = work / "build-info.json"
@@ -170,7 +178,6 @@ def build(version, platform_tag, root=ROOT, output_root=None):
         raise RuntimeError(f"PyInstaller 未生成预期程序：{executable}")
     smoke = smoke_test(executable, version, work)
 
-    staging = package / APP_NAME
     staging.mkdir(parents=True)
     if sys.platform == "darwin":
         shutil.copytree(dist / f"{APP_NAME}.app", staging / f"{APP_NAME}.app")
@@ -182,8 +189,6 @@ def build(version, platform_tag, root=ROOT, output_root=None):
         json.dumps(smoke, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    suffix = ".tar.gz" if platform_tag.startswith("linux") else ".zip"
-    artifact = package / f"{APP_NAME}-{version}-{platform_tag}{suffix}"
     archive_package(staging, artifact, platform_tag)
     digest = __import__("hashlib").sha256(artifact.read_bytes()).hexdigest()
     checksum = artifact.with_name(artifact.name + ".sha256")

@@ -1,12 +1,12 @@
 # 独立版发布机制
 
-本仓库的源码具备 PyInstaller 独立运行适配，但**普通提交、PR 和常规 CI 不生成程序包**。只有发布一个标签符合 `standalone-vX.Y.Z` 的 GitHub Release，才启动跨平台构建。预发布可使用 `standalone-vX.Y.Z-rc.1` 这类标签。
+Pull request、`main` 推送和手动 CI 都会在四种目标 runner 上构建独立版并运行启动自检；这些检查不会把程序包发布为 Release 附件。只有发布标签符合 `standalone-vX.Y.Z` 的 GitHub Release，成功构建后才会把各平台包和 SHA-256 文件上传到该 Release。预发布可使用 `standalone-vX.Y.Z-rc.1` 这类标签。
 
 ## 发布步骤
 
 1. 在 `main` 合并已通过常规测试的代码，并完成该版本要求的预测试和设备验收。独立版不替代 Issue #7 的协议锁定。
 2. 确定版本号后，以目标提交创建并发布 GitHub Release，标签使用 `standalone-v1.0.0` 这样的格式。不要复用或移动已经发布的标签。
-3. `Standalone release` 工作流从该标签检出同一提交，安装 `packaging/requirements-standalone.txt` 中锁定的依赖，分别构建并运行启动自检。
+3. `Standalone package build and release` 工作流从该标签检出同一提交，安装 `packaging/requirements-standalone.txt` 中锁定的依赖，分别构建并运行启动自检。PR 和 `main` CI 使用相同矩阵与构建步骤，提前检查四个平台能否产出可启动的程序。
 4. 四个平台任务全部成功后，工作流把压缩包和对应 SHA-256 文件上传到原 Release。任一平台失败时，发布附件步骤不会执行；可在修复后重新运行失败任务，或按项目决策发布新版本。
 5. 下载目标平台包，核对 SHA-256，并在实际采集设备完成下述人工验收后才投入使用。
 
