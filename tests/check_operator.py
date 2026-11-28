@@ -9,15 +9,17 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import run_stroop_efficacy as task  # noqa: E402
+import run as launcher  # noqa: E402
 from check_timing import ScriptedKeyboard, VirtualClock, VirtualStim  # noqa: E402
-from stroop_efficacy import archive, operator_ui  # noqa: E402
+from stroop_efficacy import archive  # noqa: E402
+from stroop_efficacy import experiment as task  # noqa: E402
 from stroop_efficacy.design import run_settings  # noqa: E402
 from stroop_efficacy.session_data import (  # noqa: E402
     TABLE_FIELDS,
     read_session_snapshot,
     write_snapshot,
 )
+from ui import operator as operator_ui  # noqa: E402
 
 
 CODE = "QA-SESSION-02"
@@ -107,11 +109,14 @@ def verify_archive(root):
         patch.object(task.core, "wait", clock.wait),
         patch.object(task.core, "quit", side_effect=SystemExit),
         patch.object(task, "MouseClass", return_value=mouse),
-        patch.object(task, "show_session_result") as result,
+        patch.object(launcher, "show_session_result") as result,
     ):
         with patch.dict(task.CFG, {"DEBUG_FAST": True}):
             inferred = task.StroopEfficacyExp(
-                INFO, keyboard=keyboard, archive_root=root
+                INFO,
+                keyboard=keyboard,
+                entrypoint=launcher.ENTRYPOINT,
+                archive_root=root,
             )
         assert (
             inferred.mode == "quick" and inferred.main_schedule.windows == (1.0,) * 12
@@ -125,24 +130,24 @@ def verify_archive(root):
             else:
                 raise AssertionError("Terminal save interrupt was swallowed")
         with patch.object(task.StroopEfficacyExp, "wait_space", return_value=None):
-            task.run_registered(INFO, "quick", root, keyboard)
+            launcher.run_registered(INFO, "quick", root, keyboard)
         with patch.object(task.StroopEfficacyExp, "wait_space", interrupted):
-            task.run_registered(INFO, "pilot", root, keyboard)
-            task.run_registered(INFO, "pilot", root, keyboard)
+            launcher.run_registered(INFO, "pilot", root, keyboard)
+            launcher.run_registered(INFO, "pilot", root, keyboard)
         with patch.object(
             task.StroopEfficacyExp,
             "wait_space",
             side_effect=RuntimeError("control failure"),
         ):
             try:
-                task.run_registered(INFO, "formal", root, keyboard)
+                launcher.run_registered(INFO, "formal", root, keyboard)
             except RuntimeError as exc:
                 assert str(exc) == "control failure"
             else:
                 raise AssertionError("Run exception was swallowed")
         with patch.object(task.StroopEfficacyExp, "wait_space", fail_on_end):
             try:
-                task.run_registered(
+                launcher.run_registered(
                     {**INFO, "被试编号": end_failure_code}, "quick", root, keyboard
                 )
             except RuntimeError as exc:
@@ -152,7 +157,7 @@ def verify_archive(root):
         with patch.object(task.StroopEfficacyExp, "run", fail_in_interval):
             for code in partial_codes:
                 try:
-                    task.run_registered(
+                    launcher.run_registered(
                         {**INFO, "被试编号": code}, "formal", root, keyboard
                     )
                 except KeyboardInterrupt as exc:

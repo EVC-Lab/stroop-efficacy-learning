@@ -3,7 +3,7 @@
 from PyQt6 import QtCore, QtGui, QtWidgets
 from psychopy.gui.qtgui import ensureQtApp
 
-from .archive import (
+from stroop_efficacy.archive import (
     MODES,
     STATUS,
     describe_session,

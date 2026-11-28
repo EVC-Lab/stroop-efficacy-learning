@@ -20,7 +20,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import run_stroop_efficacy as task
+from run import ENTRYPOINT
+from stroop_efficacy import experiment as task
 from stroop_efficacy import session_data
 
 
@@ -565,7 +566,9 @@ def check_ptb_clock(keyboard):
 
 def check_native_keyboard():
     """Observe a live PTB press and one tap released before either poll."""
-    exp = task.StroopEfficacyExp({"被试编号": "QA-PTB", "漂移方向": "正向"})
+    exp = task.StroopEfficacyExp(
+        {"被试编号": "QA-PTB", "漂移方向": "正向"}, entrypoint=ENTRYPOINT
+    )
     view = task.visual.TextStim(exp.win, font=task.CFG["FONT"], height=0.04)
     exp.win.winHandle.set_caption("PsychoPy Studio PTB test")
     try:
@@ -609,7 +612,9 @@ def check_native_keyboard():
 
 def run_intervals(args):
     if args.studio:
-        exp = task.StroopEfficacyExp({"被试编号": "QA-TIMING", "漂移方向": "正向"})
+        exp = task.StroopEfficacyExp(
+            {"被试编号": "QA-TIMING", "漂移方向": "正向"}, entrypoint=ENTRYPOINT
+        )
         assert exp.timed_input.keyboard.getBackend() == "ptb"
         check_ptb_clock(exp.timed_input.keyboard)
         exp.timed_input.keyboard.stop()
@@ -634,6 +639,7 @@ def run_intervals(args):
             exp = task.StroopEfficacyExp(
                 {"被试编号": "QA-TIMING", "漂移方向": "正向"},
                 keyboard=ScriptedKeyboard(clock.getTime),
+                entrypoint=ENTRYPOINT,
             )
 
     exp.timed_input.keyboard = ScriptedKeyboard(task.psylog.defaultClock.getTime)

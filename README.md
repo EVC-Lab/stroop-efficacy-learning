@@ -4,7 +4,7 @@
 
 ## 在 PsychoPy Studio 运行
 
-在 PsychoPy Studio 打开 **Coder**，打开仓库根目录的 [run_stroop_efficacy.py](run_stroop_efficacy.py)，点击 **Run**。保留主脚本旁的 `stroop_efficacy/`。在实验员登记页填写参与者编码、选择模式，核对序列和保存位置后启动。任务中可按 Esc 退出并保存已有记录。
+在 PsychoPy Studio 打开 **Coder**，打开仓库根目录的 [run.py](run.py)，点击 **Run**。保留脚本旁的 `stroop_efficacy/` 和 `ui/` 目录。在实验员登记页填写参与者编码、选择模式，核对序列和保存位置后启动。任务中可按 Esc 退出并保存已有记录。
 
 - **快跑**以窗口模式运行 12 个区段，单段作答窗口为 1 秒。
 - **预测试**和**正式采集**均以全屏运行三段练习和 288 个正式区段，归档目录按模式区分。采集版本将在[路线图](https://github.com/EVC-Lab/stroop-efficacy-learning/issues/8)中的验收完成后锁定。
@@ -13,7 +13,9 @@
 
 ## 程序结构
 
-主脚本负责实验界面、作答与区段流程。[`design.py`](stroop_efficacy/design.py) 管理实验参数、窗长与效能调度和历史积分抽样。[`timing.py`](stroop_efficacy/timing.py) 管理 PTB 按键和截止判定。[`operator_ui.py`](stroop_efficacy/operator_ui.py) 提供登记、场次查询和保存结果。[`archive.py`](stroop_efficacy/archive.py) 管理编码和归档查询。[`session_data.py`](stroop_efficacy/session_data.py) 保存会话文件和代码摘要。
+[`run.py`](run.py) 负责启动、初始化键盘和场次收尾。[`experiment.py`](stroop_efficacy/experiment.py) 负责被试界面、作答、计分和区段流程。顶层的 [`ui/operator.py`](ui/operator.py) 提供实验员登记、场次查询和保存结果。
+
+[`design.py`](stroop_efficacy/design.py) 管理实验参数、窗长与效能调度和历史积分抽样。[`timing.py`](stroop_efficacy/timing.py) 管理 PTB 按键和截止判定。[`archive.py`](stroop_efficacy/archive.py) 管理编码和归档查询。[`session_data.py`](stroop_efficacy/session_data.py) 保存会话文件和代码摘要。
 
 ## 作答流程
 
