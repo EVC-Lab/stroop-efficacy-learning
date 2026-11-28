@@ -166,12 +166,12 @@ def check_refresh_rate():
 
 
 def check_formal_protocol(exp, color_keys):
-    """Run the real main loop twice with different response speeds using virtual flips."""
-    subject = "QA-PROTOCOL-1"
-    info = {"被试编号": subject, "漂移方向": "自动"}
-    exp.update_info(info)
+    """Check both observed schedules before running them through the real task loop."""
+    a_info = {"被试编号": "QA-PROTOCOL-1", "漂移方向": "自动"}
+    b_info = {**a_info, "被试编号": "QA-PROTOCOL-2"}
+    exp.update_info(a_info)
     schedule = exp.main_schedule
-    exp.update_info({**info, "被试编号": "QA-PROTOCOL-2"})
+    exp.update_info(b_info)
     complement = exp.main_schedule
     assert (schedule.sequence, complement.sequence) == ("A", "B")
     assert schedule.windows == complement.windows == (2, 2, 3, 3, 4, 4) * 48
@@ -199,7 +199,7 @@ def check_formal_protocol(exp, color_keys):
     with patch.dict(
         task.CFG, {"DEBUG_FAST": True, "N_INTERVALS": 12, "WINDOW_CHOICES": (1.0,)}
     ):
-        exp.update_info(info)
+        exp.update_info(a_info)
         fast = exp.main_schedule
         assert fast.version.endswith("-fast")
         assert fast.windows == (1.0,) * 12 and fast.sources == schedule.sources[:12]
@@ -208,6 +208,13 @@ def check_formal_protocol(exp, color_keys):
             "reward",
         }
 
+    check_formal_scoring(exp, color_keys, a_info, schedule, "正向")
+    check_formal_scoring(exp, color_keys, b_info, complement, "反向")
+
+
+def check_formal_scoring(exp, color_keys, info, schedule, group):
+    """Run practice and all 288 intervals at two virtual response speeds."""
+    initial_random_count = schedule.sources.index("performance")
     early_scores, early_correct = [], []
     for response_time in (0.3, 0.9):
         exp.update_info(info)
@@ -250,29 +257,51 @@ def check_formal_protocol(exp, color_keys):
             patches.enter_context(
                 patch.object(exp.timed_input, "wait_for_response", side_effect=respond)
             )
+            exp.practice_free_window()
+            practice_history = []
+            for index, row in enumerate(exp.rows_intervals):
+                assert row["阶段"] == "prac3" and row["累计得分"] == 0
+                if index % 2 == 0:
+                    assert row["效能类型"] == "performance"
+                    assert row["得分来源"] == "表现"
+                    assert row["区段得分"] == row["正确数"] * 10
+                    practice_history.append(row["区段得分"])
+                else:
+                    assert row["效能类型"] == "random"
+                    assert row["得分来源"] == "抽取"
+                    assert row["区段得分"] in practice_history[-10:]
+            assert len(exp.rows_intervals) == exp.settings["N_PRAC3"]
+            assert {row["效能类型"] for row in exp.rows_intervals} == {
+                "performance",
+                "random",
+            }
+            assert list(exp.yoke.buf) == list(task.CFG["YOKE_INIT_SCORES"])
+            assert exp.total_score == 0
+
             exp.run_main()
             exp.save()
             meta = json.loads((Path(outdir) / "meta.json").read_text(encoding="utf-8"))
 
         assert breaks == list(schedule.block_ends[:-1])
         assert probe_events == list(schedule.probes.items())
-        assert len(exp.rows_intervals) == 288
+        main_rows = [row for row in exp.rows_intervals if row["阶段"] == "main"]
+        assert len(main_rows) == 288
         assert meta["区段数"] == 288
+        assert meta["正式调度"]["来源序列"] == schedule.sequence
         assert meta["正式调度"]["窗长s"] == list(schedule.windows)
         assert meta["正式调度"]["计分来源"] == list(schedule.sources)
         assert meta["正式调度"]["探测题"] == [
             {"区段": i + 1, "类型": k} for i, k in probe_events
         ]
         history = deque(task.CFG["YOKE_INIT_SCORES"], maxlen=10)
-        score_rng = random.Random(f"{subject}-正向:score")
+        score_rng = random.Random(f"{info['被试编号']}-{group}:score")
         cumulative = 0
-        for row, window, source in zip(
-            exp.rows_intervals, schedule.windows, schedule.sources
-        ):
+        for row, window, source in zip(main_rows, schedule.windows, schedule.sources):
             assert (
                 row["窗口s"] == window
                 and row["效能类型"] == source
                 and row["效能概率"] == ""
+                and row["组别"] == group
             )
             if source == "performance":
                 expected_score = row["正确数"] * 10
@@ -283,10 +312,18 @@ def check_formal_protocol(exp, color_keys):
             assert row["区段得分"] == expected_score and row["累计得分"] == cumulative
         assert list(exp.yoke.buf) == list(history)
         assert meta["总分"] == cumulative
-        early_scores.append([row["区段得分"] for row in exp.rows_intervals[:3]])
-        early_correct.append([row["正确数"] for row in exp.rows_intervals[:3]])
-    assert early_scores[0] == early_scores[1]
+        early_scores.append(
+            [row["区段得分"] for row in main_rows[:initial_random_count]]
+        )
+        early_correct.append(
+            [row["正确数"] for row in main_rows[: max(1, initial_random_count)]]
+        )
+    if initial_random_count:
+        assert early_scores[0] == early_scores[1]
     assert early_correct[0] != early_correct[1]
+    print(
+        f"Sequence {schedule.sequence}: practice and 288 scored intervals verified at 0.3 s and 0.9 s."
+    )
 
 
 def check_interface_keys(exp):
