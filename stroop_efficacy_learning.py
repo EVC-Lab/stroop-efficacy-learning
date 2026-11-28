@@ -836,7 +836,8 @@ def run_registered(info, mode, archive_root, keyboard):
         raise error
 
 
-def main():
+def launch_experiment():
+    """打开实验员登记页并启动已确认的场次。"""
     root = Path(__file__).resolve().parent / "data"
     registration = ask_registration(root)
     if registration is None:
@@ -854,4 +855,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    launch_experiment()
