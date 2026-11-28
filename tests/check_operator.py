@@ -44,6 +44,20 @@ def verify_archive(root):
     keyboard = ScriptedKeyboard(clock.getTime)
     window_sizes = []
     closed_windows = []
+    startup_messages = []
+
+    def make_text(window, text="", **settings):
+        stim = VirtualStim(window, text, **settings)
+        if settings.get("autoDraw"):
+            startup_messages.append(stim)
+        return stim
+
+    def measure_frame_rate(*, infoMsg):
+        assert infoMsg == ""
+        splash = startup_messages[-1]
+        assert splash.text == "正在测量显示器刷新率，请稍候"
+        assert splash.font == task.CFG["FONT"] and splash.autoDraw
+        return 1 / clock.frame_period
 
     def window_factory(**settings):
         window_sizes.append(settings["fullscr"])
@@ -66,14 +80,14 @@ def verify_archive(root):
         return SimpleNamespace(
             flip=flip,
             monitorFramePeriod=clock.frame_period,
-            getActualFrameRate=lambda **_: 1 / clock.frame_period,
+            getActualFrameRate=measure_frame_rate,
             setMouseVisible=mouse_visible,
             close=lambda: closed_windows.append(True),
         )
 
     visual = SimpleNamespace(
         Window=window_factory,
-        TextStim=VirtualStim,
+        TextStim=make_text,
         Rect=VirtualStim,
         Line=VirtualStim,
         Circle=VirtualStim,
@@ -180,6 +194,7 @@ def verify_archive(root):
             result.assert_called_with(None, CODE, "pilot", False)
     assert window_sizes == [False, False, True, True, True, False, True, True, True]
     assert result.call_count == 8 and len(closed_windows) == 9
+    assert all(not stim.autoDraw for stim in startup_messages)
     (end_failure,) = archive.list_sessions(root, end_failure_code)
     assert end_failure.status == "error" and end_failure.completed == 12
     for code, phase in zip(partial_codes, ("main", "prac3")):

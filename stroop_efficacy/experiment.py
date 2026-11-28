@@ -106,15 +106,26 @@ class StroopEfficacyExp:
 
     def _initialize_window(self):
         self.win.setMouseVisible(False)
-        measured_hz = self.win.getActualFrameRate(
-            infoMsg="正在测量显示器刷新率，请稍候"
+        f = self.settings["FONT"]
+        # PsychoPy 的内置测量提示使用默认字体，这里用任务字体绘制中文提示。
+        splash = visual.TextStim(
+            self.win,
+            "正在测量显示器刷新率，请稍候",
+            font=f,
+            color=(1, 1, 1),
+            height=0.04,
+            autoDraw=True,
+            autoLog=False,
         )
+        try:
+            measured_hz = self.win.getActualFrameRate(infoMsg="")
+        finally:
+            splash.autoDraw = False
         self.refresh_hz, self.frame_period = resolve_frame_timing(
             measured_hz, self.win.monitorFramePeriod
         )
         self.timed_input.keyboard.start()
 
-        f = self.settings["FONT"]
         self.fix = visual.TextStim(self.win, "+", font=f, color=(1, 1, 1), height=0.09)
         self.word = visual.TextStim(
             self.win,
