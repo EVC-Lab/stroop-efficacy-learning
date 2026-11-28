@@ -201,7 +201,7 @@ def check_invalid_platform(root):
 def main():
     check_release_versions()
     with TemporaryDirectory() as directory:
-        root = Path(directory)
+        root = Path(directory).resolve()
         check_archive_paths(root)
         check_macos_bundle_boundary(root)
         check_invalid_platform(root)
