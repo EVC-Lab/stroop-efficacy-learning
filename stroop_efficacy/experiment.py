@@ -22,6 +22,7 @@ from .session_data import (
     write_snapshot,
 )
 from .timing import TimedInput, open_timed_keyboard, resolve_frame_timing
+from .window_input import disable_window_ime
 
 try:  # 老接口优先：event.Mouse 方法齐全（getPressed / getPos），新版 PsychoPy 仍提供
     MouseClass = event.Mouse
@@ -53,7 +54,7 @@ class SessionInterrupted(Exception):
 
 
 def open_task_window(settings):
-    return visual.Window(
+    window = visual.Window(
         size=(1280, 800),
         fullscr=settings["FULLSCR"],
         color=settings["BG_COLOR"],
@@ -62,6 +63,8 @@ def open_task_window(settings):
         checkTiming=False,
         waitBlanking=True,
     )
+    disable_window_ime(window)
+    return window
 
 
 class StroopEfficacyExp:
