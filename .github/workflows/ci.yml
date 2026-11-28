@@ -53,3 +53,6 @@ jobs:
 
       - name: Verify synthetic behavior exports and joins
         run: python tests/check_behavior_export.py
+
+      - name: Verify operator modes and session archive
+        run: python tests/check_operator.py

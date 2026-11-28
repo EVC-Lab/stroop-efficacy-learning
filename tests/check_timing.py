@@ -289,7 +289,7 @@ def check_formal_protocol(exp, color_keys):
 
 
 def check_interface_keys(exp):
-    """Exercise confirmation, instructions, the probe and abort saving through the PTB input path."""
+    """Exercise instructions and the probe through the PTB input path."""
     original_flip = exp.win.flip
 
     def on_flip(*events):
@@ -307,10 +307,6 @@ def check_interface_keys(exp):
 
         return patch.object(exp.win, "flip", flip)
 
-    with on_flip(("r", 0.020)):
-        assert exp.confirm_info() is False
-    with on_flip(("space", 0.020)):
-        assert exp.confirm_info() is True
     with on_flip(("space", 0.020)):
         exp.wait_space("用空格继续")
 
@@ -419,14 +415,15 @@ def check_interval_interruptions(exp):
                 ),
                 patch.object(exp, "_present_target", present_with_response),
                 patch.object(exp.win, "flip", flip),
-                patch.object(exp.win, "close") as close,
+                patch.object(exp, "session_status", "running"),
+                patch.object(exp, "finished_at", ""),
                 patch.object(task.core, "quit", side_effect=SystemExit),
                 patch.dict(task.CFG, {"ISI_BETWEEN": 0.25}),
             ):
                 try:
                     exp.run_interval(36 + index, duration, "performance")
                 except SystemExit:
-                    close.assert_called_once()
+                    assert exp.session_status == "interrupted" and exp.finished_at
                 else:
                     raise AssertionError(f"Esc did not interrupt during {case}")
 

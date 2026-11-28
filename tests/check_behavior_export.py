@@ -106,12 +106,19 @@ def verify_export(tmpdir):
                 },
             )
         )
-        exp = task.StroopEfficacyExp(info, keyboard=keyboard)
-        rerun = task.StroopEfficacyExp(info, keyboard=ScriptedKeyboard(clock.getTime))
-        mocks.enter_context(patch.object(task, "__file__", str(tmpdir / "entry.py")))
         fixed_time = datetime(2026, 1, 1)
         mocks.enter_context(
             patch.object(task, "datetime", SimpleNamespace(now=lambda: fixed_time))
+        )
+        root = tmpdir / "data"
+        exp = task.StroopEfficacyExp(
+            info, keyboard=keyboard, mode="pilot", archive_root=root
+        )
+        rerun = task.StroopEfficacyExp(
+            info,
+            keyboard=ScriptedKeyboard(clock.getTime),
+            mode="pilot",
+            archive_root=root,
         )
         exp.save()
         rerun.save()
@@ -122,7 +129,12 @@ def verify_export(tmpdir):
             exp.outdir != rerun.outdir
             and first_meta["会话编号"] != rerun_meta["会话编号"]
         )
-        assert first_meta["导出版本"] == 1 and first_meta["RT单位"] == "s"
+        assert first_meta["导出版本"] == 2 and first_meta["RT单位"] == "s"
+        assert first_meta["会话开始时间"] == rerun_meta["会话开始时间"]
+        assert "姓名" not in first_meta and "合成" not in str(exp.outdir)
+        assert (
+            exp.outdir.parent == rerun.outdir.parent == root / "pilot" / "QA-EXPORT-01"
+        )
         assert len(first_meta["脚本SHA256"]) == 64 and first_meta["正式调度"]["版本"]
 
         present = exp._present_target
@@ -202,6 +214,10 @@ def verify_export(tmpdir):
         assert (
             hashlib.sha256(interval_bytes).hexdigest()
             != first_meta["数据表"]["intervals.csv"]["SHA256"]
+        )
+        assert session_data.read_session_snapshot(Path(exp.outdir)) == (
+            first_meta,
+            True,
         )
         exp.save()
         check_joins(*read_snapshot(exp.outdir))

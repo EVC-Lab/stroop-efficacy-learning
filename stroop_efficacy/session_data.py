@@ -8,9 +8,11 @@ import subprocess
 from collections import Counter
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from zipfile import BadZipFile, ZipFile
 
 
-EXPORT_VERSION = 1
+EXPORT_VERSION = 2
+RECOVERY_FILE = ".previous.zip"
 
 TABLE_FIELDS = {
     "trials.csv": (
@@ -153,8 +155,37 @@ def stimulus_counts(rows, inks, words):
     return {ink: {word: counts[ink, word] for word in words} for ink in inks}
 
 
+def checked_snapshot(read_file):
+    """只返回元数据和三个 CSV 摘要一致的快照。"""
+    try:
+        files = {"meta.json": read_file("meta.json")}
+        meta = json.loads(files["meta.json"])
+        for name in TABLE_FIELDS:
+            contents = read_file(name)
+            if hashlib.sha256(contents).hexdigest() != meta["数据表"][name]["SHA256"]:
+                return None
+            files[name] = contents
+        return meta, files
+    except (OSError, ValueError, TypeError, KeyError, RuntimeError, BadZipFile):
+        return None
+
+
+def read_session_snapshot(directory):
+    """先查当前快照，校验失败时查上一份已保存快照。"""
+    current = checked_snapshot(lambda name: (directory / name).read_bytes())
+    if current:
+        return current[0], False
+    try:
+        with ZipFile(directory / RECOVERY_FILE) as archive:
+            previous = checked_snapshot(archive.read)
+    except (OSError, BadZipFile):
+        previous = None
+    return (previous[0], True) if previous else (None, False)
+
+
 def write_snapshot(outdir, tables, meta):
     # 各文件写完整后逐个替换，最后发布元数据供读者校验同一快照。
+    outdir = Path(outdir)
     with TemporaryDirectory(prefix=".save-", dir=outdir) as staging:
         staged_files = []
         summaries = {}
@@ -185,5 +216,17 @@ def write_snapshot(outdir, tables, meta):
             json.dump({**meta, "数据表": summaries}, fh, ensure_ascii=False, indent=2)
             fh.flush()
             os.fsync(fh.fileno())
+
+        # 先发布上一份完整快照。即使进程在逐表替换期间退出，仍可校验并读取它。
+        current = checked_snapshot(lambda name: (outdir / name).read_bytes())
+        if current:
+            backup = Path(staging) / RECOVERY_FILE
+            with backup.open("w+b") as fh:
+                with ZipFile(fh, "w") as archive:
+                    for name, contents in current[1].items():
+                        archive.writestr(name, contents)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(backup, outdir / RECOVERY_FILE)
         for staged in (*staged_files, staged_meta):
-            os.replace(staged, Path(outdir) / staged.name)
+            os.replace(staged, outdir / staged.name)
