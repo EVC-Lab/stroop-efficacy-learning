@@ -75,12 +75,18 @@ def check_joins(meta, tables):
 def verify_export(tmpdir):
     clock = VirtualClock()
     window = SimpleNamespace(
-        flip=clock.flip, monitorFramePeriod=clock.frame_period,
+        flip=clock.flip,
+        monitorFramePeriod=clock.frame_period,
         getActualFrameRate=lambda **_: 1 / clock.frame_period,
-        setMouseVisible=lambda _state: None, close=lambda: None,
+        setMouseVisible=lambda _state: None,
+        close=lambda: None,
     )
     visual = SimpleNamespace(
-        Window=lambda **_: window, TextStim=VirtualStim, Rect=VirtualStim, Line=VirtualStim, Circle=VirtualStim,
+        Window=lambda **_: window,
+        TextStim=VirtualStim,
+        Rect=VirtualStim,
+        Line=VirtualStim,
+        Circle=VirtualStim,
     )
     keyboard = ScriptedKeyboard(clock.getTime)
     info = {"被试编号": "QA-EXPORT-01", "姓名": "合成"}
@@ -88,21 +94,34 @@ def verify_export(tmpdir):
         mocks.enter_context(patch.object(task, "visual", visual))
         mocks.enter_context(patch.object(task.psylog, "defaultClock", clock))
         mocks.enter_context(patch.object(task.core, "wait", clock.wait))
-        mocks.enter_context(patch.dict(task.CFG, {
-            "DEBUG_FAST": False, "N_INTERVALS": 288, "BREAK_EVERY": 36,
-            "WINDOW_CHOICES": (2.0, 3.0, 4.0), "FIX_CHOICES": (0.08,),
-        }))
+        mocks.enter_context(
+            patch.dict(
+                task.CFG,
+                {
+                    "DEBUG_FAST": False,
+                    "N_INTERVALS": 288,
+                    "BREAK_EVERY": 36,
+                    "WINDOW_CHOICES": (2.0, 3.0, 4.0),
+                    "FIX_CHOICES": (0.08,),
+                },
+            )
+        )
         exp = task.StroopEfficacyExp(info, keyboard=keyboard)
         rerun = task.StroopEfficacyExp(info, keyboard=ScriptedKeyboard(clock.getTime))
         mocks.enter_context(patch.object(task, "__file__", str(tmpdir / "entry.py")))
         fixed_time = datetime(2026, 1, 1)
-        mocks.enter_context(patch.object(task, "datetime", SimpleNamespace(now=lambda: fixed_time)))
+        mocks.enter_context(
+            patch.object(task, "datetime", SimpleNamespace(now=lambda: fixed_time))
+        )
         exp.save()
         rerun.save()
         first_meta, empty = read_snapshot(exp.outdir)
         rerun_meta, _ = read_snapshot(rerun.outdir)
         assert not any(empty.values())
-        assert exp.outdir != rerun.outdir and first_meta["会话编号"] != rerun_meta["会话编号"]
+        assert (
+            exp.outdir != rerun.outdir
+            and first_meta["会话编号"] != rerun_meta["会话编号"]
+        )
         assert first_meta["导出版本"] == 1 and first_meta["RT单位"] == "s"
         assert len(first_meta["脚本SHA256"]) == 64 and first_meta["正式调度"]["版本"]
 
@@ -124,10 +143,26 @@ def verify_export(tmpdir):
             exp._practice_trial("red", "", with_fb=False, phase="prac1")
         with scripted_targets(("f", 0.32)):
             exp._practice_trial("red", "绿", with_fb=False, phase="prac2")
-        with scripted_targets(), patch.object(exp, "make_trial_content", return_value=("red", "绿", "incongruent")):
-            exp.run_interval(0, 1.0, "performance", phase="prac3", practice_yoke=task.YokeWindow(init=[]))
-        with scripted_targets(("d", 0.3123456789), ("f", 0.26)), patch.object(
-            exp, "make_trial_content", return_value=("red", "绿", "incongruent"),
+        with (
+            scripted_targets(),
+            patch.object(
+                exp, "make_trial_content", return_value=("red", "绿", "incongruent")
+            ),
+        ):
+            exp.run_interval(
+                0,
+                1.0,
+                "performance",
+                phase="prac3",
+                practice_yoke=task.YokeWindow(init=[]),
+            )
+        with (
+            scripted_targets(("d", 0.3123456789), ("f", 0.26)),
+            patch.object(
+                exp,
+                "make_trial_content",
+                return_value=("red", "绿", "incongruent"),
+            ),
         ):
             exp.run_interval(0, 2.0, "performance")
         played_probe = False
@@ -142,7 +177,10 @@ def verify_export(tmpdir):
             return onset
 
         mouse = SimpleNamespace(getPressed=lambda: [False])
-        with patch.object(window, "flip", flip_probe), patch.object(task, "MouseClass", return_value=mouse):
+        with (
+            patch.object(window, "flip", flip_probe),
+            patch.object(task, "MouseClass", return_value=mouse),
+        ):
             exp.run_probe("efficacy", after_interval=0)
         previous_manifest = (Path(exp.outdir) / "meta.json").read_bytes()
         replace = os.replace
@@ -161,25 +199,44 @@ def verify_export(tmpdir):
                 raise AssertionError("Simulated failure did not interrupt publication")
         assert (Path(exp.outdir) / "meta.json").read_bytes() == previous_manifest
         interval_bytes = (Path(exp.outdir) / "intervals.csv").read_bytes()
-        assert hashlib.sha256(interval_bytes).hexdigest() != first_meta["数据表"]["intervals.csv"]["SHA256"]
+        assert (
+            hashlib.sha256(interval_bytes).hexdigest()
+            != first_meta["数据表"]["intervals.csv"]["SHA256"]
+        )
         exp.save()
         check_joins(*read_snapshot(exp.outdir))
 
-        with scripted_targets(("escape", 0.30)), patch.object(task.core, "quit", side_effect=SystemExit):
+        with (
+            scripted_targets(("escape", 0.30)),
+            patch.object(task.core, "quit", side_effect=SystemExit),
+        ):
             try:
                 exp.run_interval(36, exp.main_schedule.windows[36], "performance")
             except SystemExit:
                 pass
             else:
-                raise AssertionError("Synthetic Escape did not interrupt the main interval")
+                raise AssertionError(
+                    "Synthetic Escape did not interrupt the main interval"
+                )
         meta, tables = read_snapshot(exp.outdir)
         check_joins(meta, tables)
-        assert meta["会话编号"] == first_meta["会话编号"] and meta["完整区段数"] == meta["中断区段数"] == 1
-        assert [row["区段状态"] for row in tables["intervals.csv"]] == ["completed", "completed", "interrupted"]
+        assert (
+            meta["会话编号"] == first_meta["会话编号"]
+            and meta["完整区段数"] == meta["中断区段数"] == 1
+        )
+        assert [row["区段状态"] for row in tables["intervals.csv"]] == [
+            "completed",
+            "completed",
+            "interrupted",
+        ]
         assert [row["组块"] for row in tables["intervals.csv"]] == ["", "1", "2"]
         assert tables["trials.csv"][-1]["作答状态"] == "interrupted"
-        formal_first = next(row for row in tables["trials.csv"] if row["阶段"] == "main")
-        assert math.isclose(float(formal_first["反应时"]), 0.3123456789, rel_tol=0, abs_tol=1e-10)
+        formal_first = next(
+            row for row in tables["trials.csv"] if row["阶段"] == "main"
+        )
+        assert math.isclose(
+            float(formal_first["反应时"]), 0.3123456789, rel_tol=0, abs_tol=1e-10
+        )
         assert tables["intervals.csv"][1]["作答数"] == "2"
         assert tables["intervals.csv"][1]["截止未答数"] == "1"
         assert tables["probes.csv"][0]["探针类型"] == "efficacy"
@@ -187,7 +244,11 @@ def verify_export(tmpdir):
 
 if __name__ == "__main__":
     if not __debug__:
-        raise RuntimeError("Run without Python optimization so export assertions remain enabled.")
+        raise RuntimeError(
+            "Run without Python optimization so export assertions remain enabled."
+        )
     with TemporaryDirectory() as directory:
         verify_export(Path(directory))
-    print("Behavior exports passed: reruns, joins, missing responses, and interrupted publication.")
+    print(
+        "Behavior exports passed: reruns, joins, missing responses, and interrupted publication."
+    )

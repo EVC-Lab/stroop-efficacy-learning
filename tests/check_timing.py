@@ -1,4 +1,3 @@
-
 """Check interval timing with a virtual clock or a real PsychoPy Studio window.
 
 Usage: python tests/check_timing.py [--studio | --ptb-keyboard] [--fullscreen] [--isi 0.25]
@@ -79,8 +78,10 @@ class ScriptedKeyboard:
 
     def getKeys(self, keyList=None, waitRelease=False):
         ready = [
-            key for key, available_at in self.pending
-            if available_at <= self.now() and (not keyList or key.name in keyList)
+            key
+            for key, available_at in self.pending
+            if available_at <= self.now()
+            and (not keyList or key.name in keyList)
             and key.released == waitRelease
         ]
         self.pending = [(key, at) for key, at in self.pending if key not in ready]
@@ -89,7 +90,12 @@ class ScriptedKeyboard:
     def queue(self, name, timestamp, available_at=None, released=False):
         if available_at is None:
             available_at = timestamp
-        self.pending.append((SimpleNamespace(name=name, tDown=timestamp, released=released), available_at))
+        self.pending.append(
+            (
+                SimpleNamespace(name=name, tDown=timestamp, released=released),
+                available_at,
+            )
+        )
 
 
 def check_virtual_flips():
@@ -111,11 +117,19 @@ def check_deadline_poll():
         clock.now = 2.01
         timed_input.keyboard.queue("f", 2.003)
         timed_input.keyboard.queue("d", 1.999, available_at=2.005, released=True)
-        assert timed_input.wait_for_response(response_keys, 1.0, 2.0) == ("d", 1.999, None)
+        assert timed_input.wait_for_response(response_keys, 1.0, 2.0) == (
+            "d",
+            1.999,
+            None,
+        )
         timed_input.keyboard.queue("d", 0.999)
         timed_input.keyboard.queue("d", 2.0)
         timed_input.keyboard.queue("d", 2.001)
-        assert timed_input.wait_for_response(response_keys, 1.0, 2.0) == ("", None, None)
+        assert timed_input.wait_for_response(response_keys, 1.0, 2.0) == (
+            "",
+            None,
+            None,
+        )
         timed_input.keyboard.queue("space", 2.005)
         assert [key.name for key in timed_input.poll_keys(["space"])] == ["space"]
         timed_input.keyboard.queue("space", 2.005, released=True)
@@ -123,7 +137,11 @@ def check_deadline_poll():
         timed_input.keyboard.queue("d", 2.006)
         timed_input.keyboard.queue("escape", 2.007)
         timed_input.keyboard.queue("f", 2.008)
-        assert timed_input.wait_for_response(response_keys, 2.0, 3.0) == ("d", 2.006, 2.007)
+        assert timed_input.wait_for_response(response_keys, 2.0, 3.0) == (
+            "d",
+            2.006,
+            2.007,
+        )
 
 
 def check_feedback_deadline():
@@ -168,17 +186,26 @@ def check_formal_protocol(exp, color_keys):
     for planned in (schedule, complement):
         positions = [0, *(i + 1 for i in planned.probes)]
         assert positions[-1] == 288
-        assert Counter(b - a for a, b in zip(positions, positions[1:])) == {3: 24, 4: 24, 5: 24}
+        assert Counter(b - a for a, b in zip(positions, positions[1:])) == {
+            3: 24,
+            4: 24,
+            5: 24,
+        }
         kinds = list(planned.probes.values())
         assert Counter(kinds) == {"efficacy": 36, "reward": 36}
         assert all(a != b for a, b in zip(kinds, kinds[1:]))
 
-    with patch.dict(task.CFG, {"DEBUG_FAST": True, "N_INTERVALS": 12, "WINDOW_CHOICES": (1.0,)}):
+    with patch.dict(
+        task.CFG, {"DEBUG_FAST": True, "N_INTERVALS": 12, "WINDOW_CHOICES": (1.0,)}
+    ):
         exp.update_info(info)
         fast = exp.main_schedule
         assert fast.version.endswith("-fast")
         assert fast.windows == (1.0,) * 12 and fast.sources == schedule.sources[:12]
-        assert fast.block_ends == (12,) and set(fast.probes.values()) == {"efficacy", "reward"}
+        assert fast.block_ends == (12,) and set(fast.probes.values()) == {
+            "efficacy",
+            "reward",
+        }
 
     early_scores, early_correct = [], []
     for response_time in (0.3, 0.9):
@@ -203,11 +230,25 @@ def check_formal_protocol(exp, color_keys):
         with TemporaryDirectory() as outdir, ExitStack() as patches:
             patches.enter_context(patch.object(exp, "outdir", outdir))
             patches.enter_context(patch.object(exp, "wait_space"))
-            patches.enter_context(patch.object(exp, "show_break", side_effect=lambda done, _total: breaks.append(done)))
-            patches.enter_context(patch.object(
-                exp, "run_probe", side_effect=lambda kind, after_interval: probe_events.append((after_interval, kind)),
-            ))
-            patches.enter_context(patch.object(exp.timed_input, "wait_for_response", side_effect=respond))
+            patches.enter_context(
+                patch.object(
+                    exp,
+                    "show_break",
+                    side_effect=lambda done, _total: breaks.append(done),
+                )
+            )
+            patches.enter_context(
+                patch.object(
+                    exp,
+                    "run_probe",
+                    side_effect=lambda kind, after_interval: probe_events.append(
+                        (after_interval, kind)
+                    ),
+                )
+            )
+            patches.enter_context(
+                patch.object(exp.timed_input, "wait_for_response", side_effect=respond)
+            )
             exp.run_main()
             exp.save()
             meta = json.loads((Path(outdir) / "meta.json").read_text(encoding="utf-8"))
@@ -218,12 +259,20 @@ def check_formal_protocol(exp, color_keys):
         assert meta["区段数"] == 288
         assert meta["正式调度"]["窗长s"] == list(schedule.windows)
         assert meta["正式调度"]["计分来源"] == list(schedule.sources)
-        assert meta["正式调度"]["探测题"] == [{"区段": i + 1, "类型": k} for i, k in probe_events]
+        assert meta["正式调度"]["探测题"] == [
+            {"区段": i + 1, "类型": k} for i, k in probe_events
+        ]
         history = deque(task.CFG["YOKE_INIT_SCORES"], maxlen=10)
         score_rng = random.Random(f"{subject}-正向:score")
         cumulative = 0
-        for row, window, source in zip(exp.rows_intervals, schedule.windows, schedule.sources):
-            assert row["窗口s"] == window and row["效能类型"] == source and row["效能概率"] == ""
+        for row, window, source in zip(
+            exp.rows_intervals, schedule.windows, schedule.sources
+        ):
+            assert (
+                row["窗口s"] == window
+                and row["效能类型"] == source
+                and row["效能概率"] == ""
+            )
             if source == "performance":
                 expected_score = row["正确数"] * 10
                 history.append(expected_score)
@@ -250,7 +299,9 @@ def check_interface_keys(exp):
             timestamp = float(original_flip())
             if queued:
                 for key, delay in queued:
-                    exp.timed_input.keyboard.queue(key, timestamp + delay, released=True)
+                    exp.timed_input.keyboard.queue(
+                        key, timestamp + delay, released=True
+                    )
                 queued.clear()
             return timestamp
 
@@ -264,13 +315,24 @@ def check_interface_keys(exp):
         exp.wait_space("用空格继续")
 
     mouse = SimpleNamespace(getPressed=lambda: [False])
-    with patch.object(task, "MouseClass", lambda **_: mouse), on_flip(("right", 0.010), ("space", 0.030)):
+    with (
+        patch.object(task, "MouseClass", lambda **_: mouse),
+        on_flip(("right", 0.010), ("space", 0.030)),
+    ):
         exp.run_probe("efficacy", after_interval=0)
     assert exp.rows_probes[-1]["评价值"] > 50
 
     for pressed in (False, True):
-        assert task.mouse_left_pressed(SimpleNamespace(getPressed=lambda: [pressed])) is pressed
-        assert task.mouse_left_pressed(SimpleNamespace(getLeftButtonPressed=lambda: pressed)) is pressed
+        assert (
+            task.mouse_left_pressed(SimpleNamespace(getPressed=lambda: [pressed]))
+            is pressed
+        )
+        assert (
+            task.mouse_left_pressed(
+                SimpleNamespace(getLeftButtonPressed=lambda: pressed)
+            )
+            is pressed
+        )
 
 
 def check_interval_interruptions(exp):
@@ -322,11 +384,20 @@ def check_interval_interruptions(exp):
                     stop_at = (before_flip + timestamp) / 2
                 elif case == "反馈中":
                     stop_at += 0.075
-                exp.timed_input.keyboard.queue("escape", stop_at, available_at=max(stop_at, timestamp), released=True)
+                exp.timed_input.keyboard.queue(
+                    "escape",
+                    stop_at,
+                    available_at=max(stop_at, timestamp),
+                    released=True,
+                )
                 pending_feedback = False
-            elif (stage == "注视中" and n_flips == 1) or (stage == "题间空屏" and n_flips == 3):
+            elif (stage == "注视中" and n_flips == 1) or (
+                stage == "题间空屏" and n_flips == 3
+            ):
                 stop_delay = 0.025 if stage == "注视中" else 0.075
-                exp.timed_input.keyboard.queue("escape", timestamp + stop_delay, released=True)
+                exp.timed_input.keyboard.queue(
+                    "escape", timestamp + stop_delay, released=True
+                )
             return timestamp
 
         before_total = exp.total_score
@@ -336,15 +407,22 @@ def check_interval_interruptions(exp):
         duration = 1.4 if stage in ("作答中", "题间空屏") else 0.6
         with TemporaryDirectory() as directory:
             exp.outdir = directory
-            with (patch.object(exp.fb_source, "draw", feedback_draw),
-                  patch.object(exp, "make_trial_content", side_effect=[
-                      ("red", "红", "congruent"), ("red", "绿", "incongruent"),
-                  ]),
-                  patch.object(exp, "_present_target", present_with_response),
-                  patch.object(exp.win, "flip", flip),
-                  patch.object(exp.win, "close") as close,
-                  patch.object(task.core, "quit", side_effect=SystemExit),
-                  patch.dict(task.CFG, {"ISI_BETWEEN": 0.25})):
+            with (
+                patch.object(exp.fb_source, "draw", feedback_draw),
+                patch.object(
+                    exp,
+                    "make_trial_content",
+                    side_effect=[
+                        ("red", "红", "congruent"),
+                        ("red", "绿", "incongruent"),
+                    ],
+                ),
+                patch.object(exp, "_present_target", present_with_response),
+                patch.object(exp.win, "flip", flip),
+                patch.object(exp.win, "close") as close,
+                patch.object(task.core, "quit", side_effect=SystemExit),
+                patch.dict(task.CFG, {"ISI_BETWEEN": 0.25}),
+            ):
                 try:
                     exp.run_interval(36 + index, duration, "performance")
                 except SystemExit:
@@ -354,12 +432,18 @@ def check_interval_interruptions(exp):
 
             assert len(exp.rows_intervals) == before_intervals + 1
             row = exp.rows_intervals[-1]
-            with (Path(directory) / "intervals.csv").open(encoding="utf-8-sig", newline="") as stream:
+            with (Path(directory) / "intervals.csv").open(
+                encoding="utf-8-sig", newline=""
+            ) as stream:
                 intervals = list(csv.DictReader(stream))
             saved = intervals[-1]
-            with (Path(directory) / "trials.csv").open(encoding="utf-8-sig", newline="") as stream:
+            with (Path(directory) / "trials.csv").open(
+                encoding="utf-8-sig", newline=""
+            ) as stream:
                 trials = list(csv.DictReader(stream))
-            meta = json.loads((Path(directory) / "meta.json").read_text(encoding="utf-8"))
+            meta = json.loads(
+                (Path(directory) / "meta.json").read_text(encoding="utf-8")
+            )
             assert len(trials) == before_trials + row["试次数"]
             assert all(r["区段"] == saved["区段"] for r in trials[before_trials:])
             assert saved["中断阶段"] == stage, (case, saved["中断阶段"])
@@ -368,12 +452,22 @@ def check_interval_interruptions(exp):
             assert meta["实测刷新率Hz"] == exp.refresh_hz
             assert meta["出题估计帧长s"] == exp.frame_period
             assert meta["总分"] == float(saved["累计得分"])
-            assert meta["总分"] == sum(float(r["区段得分"]) for r in intervals
-                                       if r["阶段"] == "main" and r["区段得分"] != "")
-            assert meta["中断区段数"] == sum(bool(r["中断阶段"]) for r in intervals if r["阶段"] == "main")
+            assert meta["总分"] == sum(
+                float(r["区段得分"])
+                for r in intervals
+                if r["阶段"] == "main" and r["区段得分"] != ""
+            )
+            assert meta["中断区段数"] == sum(
+                bool(r["中断阶段"]) for r in intervals if r["阶段"] == "main"
+            )
             if stage == "注视中":
                 assert row["试次数"] == row["正确数"] == 0
-                assert saved["区段开始时刻s"] == saved["区段截止时刻s"] == saved["作答窗用时s"] == ""
+                assert (
+                    saved["区段开始时刻s"]
+                    == saved["区段截止时刻s"]
+                    == saved["作答窗用时s"]
+                    == ""
+                )
             else:
                 assert row["试次数"] == (2 if stage == "作答中" else 1)
                 assert row["正确数"] == 1 and row["正确率"] == 1
@@ -398,17 +492,22 @@ def check_interval_interruptions(exp):
                 assert exp.total_score == before_total
                 assert list(exp.yoke.buf) == before_history
                 if case == "翻屏前按下但翻屏后读取":
-                    assert row["区段截止时刻s"] <= row["中断时刻s"] < row["反馈翻屏时刻s"]
+                    assert (
+                        row["区段截止时刻s"] <= row["中断时刻s"] < row["反馈翻屏时刻s"]
+                    )
                     assert row["反馈结束时刻s"] > row["反馈翻屏时刻s"]
                     assert 0 < float(saved["反馈时长s"]) < 0.250
                     assert saved["反馈翻屏时刻s"] == f"{row['反馈翻屏时刻s']:.6f}"
                 else:
                     assert saved["反馈翻屏时刻s"] == ""
-    print("UI input, both mouse APIs, and seven abort scenarios including the feedback flip boundary passed.")
+    print(
+        "UI input, both mouse APIs, and seven abort scenarios including the feedback flip boundary passed."
+    )
 
 
 def check_failed_save(exp):
     """A partial write in staging cannot damage the previously published files."""
+
     def fail_after_partial_write(_meta, stream, **_):
         stream.write("{")
         raise OSError("simulated write failure")
@@ -417,15 +516,19 @@ def check_failed_save(exp):
         exp.save()
         before = {path.name: path.read_bytes() for path in Path(directory).iterdir()}
         assert set(before) == {"trials.csv", "intervals.csv", "probes.csv", "meta.json"}
-        with (patch.object(exp, "rows_intervals", exp.rows_intervals[:-1]),
-              patch.object(session_data.json, "dump", fail_after_partial_write)):
+        with (
+            patch.object(exp, "rows_intervals", exp.rows_intervals[:-1]),
+            patch.object(session_data.json, "dump", fail_after_partial_write),
+        ):
             try:
                 exp.save()
             except OSError as exc:
                 assert str(exc) == "simulated write failure"
             else:
                 raise AssertionError("The simulated write failure did not reach save()")
-        assert {path.name: path.read_bytes() for path in Path(directory).iterdir()} == before
+        assert {
+            path.name: path.read_bytes() for path in Path(directory).iterdir()
+        } == before
     print("A failed staged save left all four previous files intact.")
 
 
@@ -452,11 +555,15 @@ def check_ptb_clock(keyboard):
     held = device.parseMessage({"down": True, "keycode": code, "time": ptb_time})
     device.responses.append(held)
     assert timed_input.poll_keys(["d"]) == [held]
-    released = device.parseMessage({"down": False, "keycode": code, "time": ptb_time + 0.05})
+    released = device.parseMessage(
+        {"down": False, "keycode": code, "time": ptb_time + 0.05}
+    )
     assert released is held
     device.responses.append(released)
     assert timed_input.poll_keys(["d"]) == []
-    print("Native PTB clock conversion and de-duplication passed with constructed device events.")
+    print(
+        "Native PTB clock conversion and de-duplication passed with constructed device events."
+    )
 
 
 def check_native_keyboard():
@@ -469,13 +576,17 @@ def check_native_keyboard():
         view.text = "PTB 键盘检查 1 / 2\n\n请轻按一次 D 并松开。"
         view.draw()
         onset = float(exp.win.flip())
-        key, t_down, escape_at = exp.timed_input.wait_for_response(exp.response_keys, onset, onset + 60)
+        key, t_down, escape_at = exp.timed_input.wait_for_response(
+            exp.response_keys, onset, onset + 60
+        )
         assert key == "d" and escape_at is None, "PTB did not capture the first D press"
         observed = task.psylog.defaultClock.getTime()
         tolerance = max(2 * exp.frame_period, 0.025)
         assert onset <= t_down <= observed and observed - t_down < tolerance
         task.core.wait(0.3, hogCPUperiod=0.001)
-        assert exp.timed_input.poll_keys(["d"]) == [], "D release counted as a second press"
+        assert exp.timed_input.poll_keys(["d"]) == [], (
+            "D release counted as a second press"
+        )
         print(f"PTB first D poll lag: {(observed - t_down) * 1000:.2f} ms.", flush=True)
 
         exp.timed_input.keyboard.clearEvents()
@@ -487,8 +598,13 @@ def check_native_keyboard():
         assert len(keys) == 1, f"Expected one completed J press, got {len(keys)}"
         assert onset <= keys[0].tDown < onset + 30.0
         assert keys[0].duration is not None and keys[0].duration > 0
-        assert exp.timed_input.poll_keys(["j"]) == [], "Completed J press was returned twice"
-        print("Live PTB press and completed tap, timestamps and de-duplication passed.", flush=True)
+        assert exp.timed_input.poll_keys(["j"]) == [], (
+            "Completed J press was returned twice"
+        )
+        print(
+            "Live PTB press and completed tap, timestamps and de-duplication passed.",
+            flush=True,
+        )
     finally:
         exp.timed_input.keyboard.stop()
         exp.win.close()
@@ -504,23 +620,32 @@ def run_intervals(args):
     else:
         clock = task.psylog.defaultClock
         window = SimpleNamespace(
-            flip=clock.flip, monitorFramePeriod=clock.frame_period,
+            flip=clock.flip,
+            monitorFramePeriod=clock.frame_period,
             getActualFrameRate=lambda **_: 1 / clock.frame_period,
-            setMouseVisible=lambda _visible: None, close=lambda: None,
+            setMouseVisible=lambda _visible: None,
+            close=lambda: None,
         )
         virtual_visual = SimpleNamespace(
-            Window=lambda **_settings: window, TextStim=VirtualStim, Rect=VirtualStim,
-            Line=VirtualStim, Circle=VirtualStim,
+            Window=lambda **_settings: window,
+            TextStim=VirtualStim,
+            Rect=VirtualStim,
+            Line=VirtualStim,
+            Circle=VirtualStim,
         )
         with patch.object(task, "visual", virtual_visual):
-            exp = task.StroopEfficacyExp({"被试编号": "QA-TIMING", "漂移方向": "正向"},
-                                        keyboard=ScriptedKeyboard(clock.getTime))
+            exp = task.StroopEfficacyExp(
+                {"被试编号": "QA-TIMING", "漂移方向": "正向"},
+                keyboard=ScriptedKeyboard(clock.getTime),
+            )
 
     exp.timed_input.keyboard = ScriptedKeyboard(task.psylog.defaultClock.getTime)
     real_flip = window.flip
     real_draw = exp.word.draw
     real_feedback = exp._fb_interval
-    color_keys = {tuple(task.CFG["COLOR_RGB"][ink]): k for ink, k in task.CFG["KEYS"].items()}
+    color_keys = {
+        tuple(task.CFG["COLOR_RGB"][ink]): k for ink, k in task.CFG["KEYS"].items()
+    }
     pending_target = False
     first_on = None
     end = None
@@ -547,8 +672,12 @@ def run_intervals(args):
             end = first_on + duration
         color = tuple(float(channel) for channel in exp.word.color)
         key = next(
-            (key for rgb, key in color_keys.items()
-             if len(color) == len(rgb) and all(math.isclose(a, b, abs_tol=1e-5) for a, b in zip(color, rgb))),
+            (
+                key
+                for rgb, key in color_keys.items()
+                if len(color) == len(rgb)
+                and all(math.isclose(a, b, abs_tol=1e-5) for a, b in zip(color, rgb))
+            ),
             None,
         )
         if key is None:
@@ -586,26 +715,41 @@ def run_intervals(args):
                 practice = scenario == "practice_timeout"
                 previous_total = exp.total_score
                 if practice:
-                    interval = exp.run_interval(None, duration, "random", phase="prac3",
-                                                practice_yoke=task.YokeWindow(init=[30]))
+                    interval = exp.run_interval(
+                        None,
+                        duration,
+                        "random",
+                        phase="prac3",
+                        practice_yoke=task.YokeWindow(init=[30]),
+                    )
                 else:
                     interval = exp.run_interval(len(reports), duration, "performance")
                 trials = exp.rows_trials[n:]
                 feedback_delay = interval["反馈翻屏时刻s"] - end
-                feedback_duration = interval["反馈结束时刻s"] - interval["反馈翻屏时刻s"]
+                feedback_duration = (
+                    interval["反馈结束时刻s"] - interval["反馈翻屏时刻s"]
+                )
                 assert interval["区段开始时刻s"] == first_on
                 assert interval["区段截止时刻s"] == end
                 assert interval["作答窗用时s"] == duration
-                assert math.isclose(interval["反馈延迟s"], feedback_delay, abs_tol=0.00000051)
-                assert math.isclose(interval["反馈时长s"], feedback_duration, abs_tol=0.00000051)
+                assert math.isclose(
+                    interval["反馈延迟s"], feedback_delay, abs_tol=0.00000051
+                )
+                assert math.isclose(
+                    interval["反馈时长s"], feedback_duration, abs_tol=0.00000051
+                )
                 assert math.isclose(end - first_on, duration, abs_tol=1e-9)
                 tolerance = max(2 * exp.frame_period, 0.025)
                 within_tolerance = (
                     -1e-9 <= feedback_delay <= tolerance
-                    and task.CFG["FB_DUR"] - 1e-9 <= feedback_duration <= task.CFG["FB_DUR"] + tolerance
+                    and task.CFG["FB_DUR"] - 1e-9
+                    <= feedback_duration
+                    <= task.CFG["FB_DUR"] + tolerance
                 )
                 if practice:
-                    assert interval["区段得分"] == 30 and exp.total_score == previous_total
+                    assert (
+                        interval["区段得分"] == 30 and exp.total_score == previous_total
+                    )
                 else:
                     assert interval["区段得分"] == 10 * sum(r["正确"] for r in trials)
                 for row in trials:
@@ -621,18 +765,27 @@ def run_intervals(args):
                 if scenario == "normal":
                     assert interval["正确数"] >= 2
                     for earlier, following in zip(trials, trials[1:]):
-                        assert following["目标翻屏时刻s"] - earlier["按键时刻s"] >= args.isi - 1e-9
+                        assert (
+                            following["目标翻屏时刻s"] - earlier["按键时刻s"]
+                            >= args.isi - 1e-9
+                        )
                 else:
                     assert len(trials) == 1
                     assert bool(trials[0]["反应键"]) == (scenario == "before")
-                reports.append({
-                    "window_s": duration, "case": scenario,
-                    "feedback_delay_ms": round(1000 * feedback_delay, 2),
-                    "feedback_duration_s": round(feedback_duration, 4),
-                    "finalization_ms_from_cutoff": round(1000 * (feedback_entered - end), 2),
-                    "within_flip_tolerance": within_tolerance,
-                    "trials": len(trials), "points": interval["区段得分"],
-                })
+                reports.append(
+                    {
+                        "window_s": duration,
+                        "case": scenario,
+                        "feedback_delay_ms": round(1000 * feedback_delay, 2),
+                        "feedback_duration_s": round(feedback_duration, 4),
+                        "finalization_ms_from_cutoff": round(
+                            1000 * (feedback_entered - end), 2
+                        ),
+                        "within_flip_tolerance": within_tolerance,
+                        "trials": len(trials),
+                        "points": interval["区段得分"],
+                    }
+                )
         window.flip = real_flip
         exp.word.draw = real_draw
         exp._fb_interval = real_feedback
@@ -652,13 +805,27 @@ def run_intervals(args):
 def main():
     parser = argparse.ArgumentParser()
     modes = parser.add_mutually_exclusive_group()
-    modes.add_argument("--studio", action="store_true", help="Use real flips in a Studio window.")
-    modes.add_argument("--ptb-keyboard", action="store_true", help="Check the native PTB queue with two live keypresses.")
-    parser.add_argument("--fullscreen", action="store_true", help="Use the full-screen acquisition mode.")
-    parser.add_argument("--isi", type=float, default=0.25, help="Blank interval in seconds.")
+    modes.add_argument(
+        "--studio", action="store_true", help="Use real flips in a Studio window."
+    )
+    modes.add_argument(
+        "--ptb-keyboard",
+        action="store_true",
+        help="Check the native PTB queue with two live keypresses.",
+    )
+    parser.add_argument(
+        "--fullscreen",
+        action="store_true",
+        help="Use the full-screen acquisition mode.",
+    )
+    parser.add_argument(
+        "--isi", type=float, default=0.25, help="Blank interval in seconds."
+    )
     args = parser.parse_args()
     if not __debug__:
-        parser.error("Run without Python optimization so timing assertions remain enabled")
+        parser.error(
+            "Run without Python optimization so timing assertions remain enabled"
+        )
     if args.fullscreen and not (args.studio or args.ptb_keyboard):
         parser.error("--fullscreen requires --studio or --ptb-keyboard")
     if args.ptb_keyboard:
@@ -674,9 +841,14 @@ def main():
 
     # 区段编号及组块检查使用正式调度。临时覆盖实验员保存的快跑设置。
     settings = {
-        "DEBUG_FAST": False, "N_INTERVALS": 288, "BREAK_EVERY": 36,
-        "WINDOW_CHOICES": (2.0, 3.0, 4.0), "FB_DUR": 1.5,
-        "FULLSCR": args.fullscreen, "FIX_CHOICES": (0.08,), "ISI_BETWEEN": args.isi,
+        "DEBUG_FAST": False,
+        "N_INTERVALS": 288,
+        "BREAK_EVERY": 36,
+        "WINDOW_CHOICES": (2.0, 3.0, 4.0),
+        "FB_DUR": 1.5,
+        "FULLSCR": args.fullscreen,
+        "FIX_CHOICES": (0.08,),
+        "ISI_BETWEEN": args.isi,
     }
     with patch.dict(task.CFG, settings):
         if args.studio:
@@ -684,10 +856,23 @@ def main():
         else:
             virtual = VirtualClock()
             # Keep getTime, waits and flips on the same clock in the simulated run.
-            with patch.object(task.psylog, "defaultClock", virtual), patch.object(task.core, "wait", virtual.wait):
+            with (
+                patch.object(task.psylog, "defaultClock", virtual),
+                patch.object(task.core, "wait", virtual.wait),
+            ):
                 results = run_intervals(args)
-    print(json.dumps({"studio": args.studio, "fullscreen": args.fullscreen,
-                      "isi_s": args.isi, "intervals": results}, indent=2), flush=True)
+    print(
+        json.dumps(
+            {
+                "studio": args.studio,
+                "fullscreen": args.fullscreen,
+                "isi_s": args.isi,
+                "intervals": results,
+            },
+            indent=2,
+        ),
+        flush=True,
+    )
     if not all(row["within_flip_tolerance"] for row in results):
         sys.exit("Feedback timing exceeded the tolerance of two refresh periods.")
 

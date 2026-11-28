@@ -11,7 +11,9 @@ def open_timed_keyboard():
     # 登记对话框关闭、实验窗口就绪后再启动队列。区段内持续监听。
     keyboard = Keyboard(backend="ptb", waitForStart=True)
     if keyboard.getBackend() != "ptb":
-        raise RuntimeError("请用 PsychoPy Studio 的 Python 环境运行，并确认 Psychtoolbox 键盘后端可用。")
+        raise RuntimeError(
+            "请用 PsychoPy Studio 的 Python 环境运行，并确认 Psychtoolbox 键盘后端可用。"
+        )
     return keyboard
 
 
@@ -70,7 +72,9 @@ class TimedInput:
         while True:
             poll_time = psylog.defaultClock.getTime()
             keys = self.poll_keys(key_list)
-            escape_at = next((press.tDown for press in keys if press.name == "escape"), None)
+            escape_at = next(
+                (press.tDown for press in keys if press.name == "escape"), None
+            )
             response_end = deadline if escape_at is None else min(deadline, escape_at)
             for press in keys:
                 if press.name != "escape" and onset <= press.tDown < response_end:
